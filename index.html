@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="description" content="Video-Hub — Download TikTok, Instagram & Facebook videos instantly. Free, fast, no login required." />
+<meta name="theme-color" content="#2563EB" />
+<title>Video-Hub — Download TikTok, Instagram & Facebook Videos</title>
+
+<!-- Poppins font -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ============ PAGE LOADER ============ -->
+<div class="page-loader" id="pageLoader">
+  <div class="loader-ring"></div>
+  <p class="loader-text">Video-Hub</p>
+</div>
+
+<!-- ============ ANIMATED CURSOR ============ -->
+<div class="cursor-dot" id="cursorDot" aria-hidden="true"></div>
+<div class="cursor-ring" id="cursorRing" aria-hidden="true"></div>
+
+<!-- ============ BACKGROUND LAYERS ============ -->
+<div class="bg-gradient" aria-hidden="true"></div>
+<div class="bg-blobs" aria-hidden="true">
+  <span class="blob blob-1"></span>
+  <span class="blob blob-2"></span>
+  <span class="blob blob-3"></span>
+</div>
+<canvas class="particles" id="particles" aria-hidden="true"></canvas>
+<div class="mouse-light" id="mouseLight" aria-hidden="true"></div>
+
+<!-- ============ NAVBAR ============ -->
+<header class="navbar" id="navbar">
+  <nav class="nav-inner container" aria-label="Main navigation">
+    <a href="#home" class="nav-logo">
+      <span class="nav-logo-icon">🎬</span>
+      <span class="nav-logo-text">Video-Hub</span>
+    </a>
+
+    <ul class="nav-menu" id="navMenu">
+      <li><a href="#home" class="nav-link active">Home</a></li>
+      <li><a href="#how" class="nav-link">How It Works</a></li>
+      <li><a href="#platforms" class="nav-link">Supported Platforms</a></li>
+      <li><a href="#faq" class="nav-link">FAQ</a></li>
+      <li><a href="#contact" class="nav-link">Contact</a></li>
+    </ul>
+
+    <button class="nav-toggle" id="navToggle" aria-label="Toggle menu" aria-expanded="false" aria-controls="navMenu">
+      <span></span><span></span><span></span>
+    </button>
+  </nav>
+  <div class="nav-progress" id="navProgress"></div>
+</header>
+
+<main>
+
+<!-- ============ HERO ============ -->
+<section class="hero section" id="home">
+  <div class="container hero-inner">
+
+    <!-- Floating 3D icons -->
+    <div class="float-icons" aria-hidden="true">
+      <div class="float-icon fi-1" data-depth="2.2">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></svg>
+      </div>
+      <div class="float-icon fi-2" data-depth="3">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1.2" fill="currentColor" stroke="none"/></svg>
+      </div>
+      <div class="float-icon fi-3" data-depth="1.6">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 12.06C22 6.5 17.52 2 12 2S2 6.5 2 12.06c0 5 3.66 9.15 8.44 9.94v-7.03H7.9v-2.91h2.54V9.85c0-2.52 1.49-3.91 3.77-3.91 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.78-1.63 1.57v1.89h2.78l-.45 2.91h-2.33V22c4.78-.79 8.44-4.94 8.44-9.94Z"/></svg>
+      </div>
+      <div class="float-icon fi-4" data-depth="2.6">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
+      </div>
+      <div class="float-icon fi-5" data-depth="2">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg>
+      </div>
+    </div>
+
+    <div class="hero-badge reveal" data-reveal="fade">
+      <span class="pulse-dot"></span> 100% Free • No Login • No Watermark
+    </div>
+
+    <h1 class="hero-title reveal" data-reveal="up">
+      <span class="hero-logo-icon">🎬</span>
+      <span class="gradient-text shimmer">Video-Hub</span>
+    </h1>
+
+    <p class="hero-subtitle reveal" data-reveal="up" data-delay="100">
+      Download <span class="type-target" id="typeTarget"></span><span class="type-caret"></span> videos instantly.
+    </p>
+
+    <p class="hero-sub2 reveal" data-reveal="up" data-delay="200">
+      Paste a link. Hit download. That's it.
+    </p>
+
+    <!-- ---- Paste Link Card ---- -->
+    <div class="paste-card glass tilt reveal" data-reveal="up" data-delay="300" id="pasteCard">
+      <div class="paste-glow" aria-hidden="true"></div>
+
+      <form class="paste-form" id="downloadForm" novalidate>
+        <div class="input-wrap" id="inputWrap">
+          <input
+            type="url"
+            id="videoUrl"
+            class="url-input"
+            placeholder=" "
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="Video link"
+          />
+          <label for="videoUrl" class="float-label">Paste your video link here...</label>
+          <span class="input-platform" id="inputPlatform" aria-hidden="true"></span>
+          <button type="button" class="paste-btn" id="pasteBtn" title="Paste from clipboard" aria-label="Paste from clipboard">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+          </button>
+        </div>
+
+        <button type="submit" class="btn-download ripple" id="downloadBtn">
+          <span class="btn-label">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
+            Download
+          </span>
+          <span class="btn-spinner" aria-hidden="true"></span>
+        </button>
+      </form>
+
+      <p class="paste-hint">
+        Works with TikTok, Instagram Reels &amp; Facebook videos
+      </p>
+    </div>
+
+    <!-- ---- Supported chips ---- -->
+    <div class="hero-chips reveal" data-reveal="up" data-delay="400">
+      <span class="chip chip-tiktok">TikTok</span>
+      <span class="chip chip-instagram">Instagram</span>
+      <span class="chip chip-facebook">Facebook</span>
+    </div>
+
+    <!-- ---- Download Result Section (hidden initially) ---- -->
+    <section class="result-section" id="resultSection" aria-live="polite" hidden>
+      <div class="result-card glass tilt" id="resultCard">
+        <div class="result-head">
+          <span class="result-tag" id="resultPlatformTag">
+            <span class="result-tag-icon" id="resultPlatformIcon"></span>
+            <span id="resultPlatformName">TikTok</span>
+          </span>
+          <button class="result-close" id="resultClose" aria-label="Close download panel">&times;</button>
+        </div>
+
+        <div class="result-body">
+          <!-- Video preview -->
+          <div class="preview-wrap">
+            <div class="preview-thumb" id="previewThumb">
+              <div class="preview-shine" aria-hidden="true"></div>
+              <button class="play-btn" aria-label="Preview video">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72L19 12 8 5.14Z"/></svg>
+              </button>
+              <span class="preview-duration" id="previewDuration">00:32</span>
+              <span class="preview-badge" id="previewBadge">HD</span>
+            </div>
+          </div>
+
+          <!-- Meta + buttons -->
+          <div class="result-info">
+            <h3 class="result-title" id="resultTitle">Awesome video ready to download</h3>
+
+            <ul class="result-meta">
+              <li><span class="meta-k">Platform</span><span class="meta-v" id="metaPlatform">TikTok</span></li>
+              <li><span class="meta-k">Quality</span><span class="meta-v" id="metaQuality">1080p • HD</span></li>
+              <li><span class="meta-k">Size</span><span class="meta-v" id="metaSize">12.4 MB</span></li>
+              <li><span class="meta-k">Format</span><span class="meta-v">MP4 / MP3</span></li>
+            </ul>
+
+            <div class="dl-grid">
+              <a class="dl-btn dl-hd ripple" id="dlHd" href="#" download>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
+                <span>Download HD</span>
+                <em>1080p</em>
+              </a>
+              <a class="dl-btn dl-sd ripple" id="dlSd" href="#" download>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
+                <span>Download SD</span>
+                <em>480p</em>
+              </a>
+              <a class="dl-btn dl-mp3 ripple" id="dlMp3" href="#" download>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>
+                <span>Download MP3</span>
+                <em>Audio</em>
+              </a>
+              <button class="dl-btn dl-copy ripple" id="dlCopy" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span>Copy Link</span>
+                <em>Share</em>
+              </button>
+            </div>
+
+            <p class="dl-note">Demo mode — links are placeholders for GitHub Pages.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Scroll cue -->
+  <a href="#how" class="scroll-cue" aria-label="Scroll down">
+    <span class="mouse"><span class="wheel"></span></span>
+  </a>
+</section>
+
+<!-- ============ HOW IT WORKS ============ -->
+<section class="section" id="how">
+  <div class="container">
+    <header class="section-head reveal" data-reveal="up">
+      <span class="eyebrow">Simple as it gets</span>
+      <h2 class="section-title">How It <span class="gradient-text">Works</span></h2>
+      <p class="section-sub">Three steps. Ten seconds. No account, no app, no nonsense.</p>
+    </header>
+
+    <div class="steps-grid">
+      <article class="step-card glass tilt reveal" data-reveal="up" data-delay="0">
+        <span class="step-num">01</span>
+        <div class="step-icon step-icon-blue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+        </div>
+        <h3>Paste Link</h3>
+        <p>Copy the video link from TikTok, Instagram or Facebook and drop it into the box above.</p>
+        <span class="step-line" aria-hidden="true"></span>
+      </article>
+
+      <article class="step-card glass tilt reveal" data-reveal="up" data-delay="120">
+        <span class="step-num">02</span>
+        <div class="step-icon step-icon-green">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
+        </div>
+        <h3>Click Download</h3>
+        <p>Hit the Download button. We detect the platform automatically and prepare your file.</p>
+        <span class="step-line" aria-hidden="true"></span>
+      </article>
+
+      <article class="step-card glass tilt reveal" data-reveal="up" data-delay="240">
+        <span class="step-num">03</span>
+        <div class="step-icon step-icon-yellow">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+        </div>
+        <h3>Save Video</h3>
+        <p>Pick HD, SD or MP3 and save straight to your phone, tablet or desktop. Done.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SUPPORTED PLATFORMS ============ -->
+<section class="section" id="platforms">
+  <div class="container">
+    <header class="section-head reveal" data-reveal="up">
+      <span class="eyebrow">Compatibility</span>
+      <h2 class="section-title">Supported <span class="gradient-text">Platforms</span></h2>
+      <p class="section-sub">Built for the three biggest short-video networks on the planet.</p>
+    </header>
+
+    <div class="platform-grid">
+      <article class="platform-card glass tilt reveal" data-reveal="zoom" data-platform="tiktok">
+        <span class="platform-border" aria-hidden="true"></span>
+        <div class="platform-icon">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></svg>
+        </div>
+        <h3>TikTok</h3>
+        <p>Videos and slideshows without the watermark, in original quality.</p>
+        <ul class="platform-tags"><li>No watermark</li><li>1080p</li><li>MP3</li></ul>
+      </article>
+
+      <article class="platform-card glass tilt reveal" data-reveal="zoom" data-delay="120" data-platform="instagram">
+        <span class="platform-border" aria-hidden="true"></span>
+        <div class="platform-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1.3" fill="currentColor" stroke="none"/></svg>
+        </div>
+        <h3>Instagram</h3>
+        <p>Reels, feed videos, IGTV and stories — saved in a couple of taps.</p>
+        <ul class="platform-tags"><li>Reels</li><li>Stories</li><li>IGTV</li></ul>
+      </article>
+
+      <article class="platform-card glass tilt reveal" data-reveal="zoom" data-delay="240" data-platform="facebook">
+        <span class="platform-border" aria-hidden="true"></span>
+        <div class="platform-icon">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 12.06C22 6.5 17.52 2 12 2S2 6.5 2 12.06c0 5 3.66 9.15 8.44 9.94v-7.03H7.9v-2.91h2.54V9.85c0-2.52 1.49-3.91 3.77-3.91 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.78-1.63 1.57v1.89h2.78l-.45 2.91h-2.33V22c4.78-.79 8.44-4.94 8.44-9.94Z"/></svg>
+        </div>
+        <h3>Facebook</h3>
+        <p>Public videos, Reels and watch clips in HD or compact SD.</p>
+        <ul class="platform-tags"><li>HD / SD</li><li>Reels</li><li>Watch</li></ul>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FEATURES ============ -->
+<section class="section" id="features">
+  <div class="container">
+    <header class="section-head reveal" data-reveal="up">
+      <span class="eyebrow">Why Video-Hub</span>
+      <h2 class="section-title">Everything you need, <span class="gradient-text">nothing you don't</span></h2>
+      <p class="section-sub">Fast, free and friendly on every device you own.</p>
+    </header>
+
+    <div class="feature-grid">
+      <article class="feature-card glass reveal" data-reveal="up">
+        <div class="feature-icon fc-yellow">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.1 13.4a.7.7 0 0 0 .5 1.1H11l-1 7.5 8.9-11.4a.7.7 0 0 0-.5-1.1H12l1-7.5Z"/></svg>
+        </div>
+        <h3>Lightning Fast</h3>
+        <p>Links resolve in under a second on our edge network.</p>
+      </article>
+
+      <article class="feature-card glass reveal" data-reveal="up" data-delay="60">
+        <div class="feature-icon fc-blue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/></svg>
+        </div>
+        <h3>Unlimited Downloads</h3>
+        <p>No daily caps, no queues, no "come back tomorrow".</p>
+      </article>
+
+      <article class="feature-card glass reveal" data-reveal="up" data-delay="120">
+        <div class="feature-icon fc-green">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0"/></svg>
+        </div>
+        <h3>No Login Required</h3>
+        <p>We never ask for an account, email or password.</p>
+      </article>
+
+      <article class="feature-card glass reveal" data-reveal="up" data-delay="180">
+        <div class="feature-icon fc-yellow">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l8.8 8.8 8.8-8.8a5.5 5.5 0 0 0 0-7.8Z"/></svg>
+        </div>
+        <h3>Free Forever</h3>
+        <p>Zero cost, zero subscription, zero credit card.</p>
+      </article>
+
+      <article class="feature-card glass reveal" data-reveal="up" data-delay="240">
+        <div class="feature-icon fc-blue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M7 15V9m0 3h3m0-3v6m5 0V9h1.8a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H15Z"/></svg>
+        </div>
+        <h3>HD Quality</h3>
+        <p>Original resolution up to 1080p, never re-compressed.</p>
+      </article>
+
+      <article class="feature-card glass reveal" data-reveal="up" data-delay="300">
+        <div class="feature-icon fc-green">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg>
+        </div>
+        <h3>Mobile Friendly</h3>
+        <p>Designed phone-first — works beautifully on any screen.</p>
+      </article>
+
+      <article class="feature-card glass reveal" data-reveal="up" data-delay="360">
+        <div class="feature-icon fc-yellow">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17h16"/><path d="M6 13h12"/><path d="M9 9h6"/><path d="M12 3v2"/></svg>
+        </div>
+        <h3>Fast Servers</h3>
+        <p>Global CDN nodes keep transfer speeds maxed out.</p>
+      </article>
+
+      <article class="feature-card glass reveal" data-reveal="up" data-delay="420">
+        <div class="feature-icon fc-blue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+        </div>
+        <h3>Safe &amp; Secure</h3>
+        <p>No trackers, no malware, no history stored. Ever.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ MOBILE / DEVICE SUPPORT ============ -->
+<section class="section" id="devices">
+  <div class="container">
+    <header class="section-head reveal" data-reveal="up">
+      <span class="eyebrow">Works everywhere</span>
+      <h2 class="section-title">Download on <span class="gradient-text">any device</span></h2>
+      <p class="section-sub">One site, every screen. No app install required.</p>
+    </header>
+
+    <div class="device-grid">
+      <article class="device-card glass tilt reveal" data-reveal="up">
+        <div class="device-icon dc-green">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 10a7 7 0 0 1 14 0"/><path d="M5 10h14v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2Z"/><path d="m7.5 6.5-1-2m10 2 1-2"/><circle cx="9.2" cy="7.6" r=".6" fill="currentColor"/><circle cx="14.8" cy="7.6" r=".6" fill="currentColor"/></svg>
+        </div>
+        <h3>Android</h3>
+        <p>Chrome, Samsung Internet &amp; Firefox</p>
+      </article>
+
+      <article class="device-card glass tilt reveal" data-reveal="up" data-delay="90">
+        <div class="device-icon dc-blue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="2" width="11" height="20" rx="3"/><path d="M10.5 5.5h3"/><path d="M11 18.5h2"/></svg>
+        </div>
+        <h3>iPhone</h3>
+        <p>Safari &amp; the Files app</p>
+      </article>
+
+      <article class="device-card glass tilt reveal" data-reveal="up" data-delay="180">
+        <div class="device-icon dc-yellow">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3" width="17" height="18" rx="2.5"/><path d="M11 18h2"/></svg>
+        </div>
+        <h3>Tablet</h3>
+        <p>iPad &amp; Android tablets</p>
+      </article>
+
+      <article class="device-card glass tilt reveal" data-reveal="up" data-delay="270">
+        <div class="device-icon dc-blue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="12.5" rx="2"/><path d="M8 20.5h8"/><path d="M12 16.5v4"/></svg>
+        </div>
+        <h3>Desktop</h3>
+        <p>Windows, macOS &amp; Linux</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FAQ ============ -->
+<section class="section" id="faq">
+  <div class="container container-narrow">
+    <header class="section-head reveal" data-reveal="up">
+      <span class="eyebrow">Answers</span>
+      <h2 class="section-title">Frequently Asked <span class="gradient-text">Questions</span></h2>
+      <p class="section-sub">Everything people usually ask before their first download.</p>
+    </header>
+
+    <div class="faq-list" id="faqList">
+      <div class="faq-item glass reveal" data-reveal="up">
+        <button class="faq-q" aria-expanded="false">
+          <span>How do I download TikTok videos?</span>
+          <span class="faq-icon" aria-hidden="true"></span>
+        </button>
+        <div class="faq-a"><div class="faq-a-inner">
+          <p>Open TikTok, tap <strong>Share → Copy link</strong>, then paste that link into the box at the top of this page and press Download. Choose HD, SD or MP3 from the panel that appears.</p>
+        </div></div>
+      </div>
+
+      <div class="faq-item glass reveal" data-reveal="up" data-delay="60">
+        <button class="faq-q" aria-expanded="false">
+          <span>Can I download Instagram Reels?</span>
+          <span class="faq-icon" aria-hidden="true"></span>
+        </button>
+        <div class="faq-a"><div class="faq-a-inner">
+          <p>Yes. Reels, feed videos, IGTV and public stories all work. Tap the <strong>…</strong> menu on the post, choose <strong>Copy link</strong>, and paste it here. Private accounts aren't supported.</p>
+        </div></div>
+      </div>
+
+      <div class="faq-item glass reveal" data-reveal="up" data-delay="120">
+        <button class="faq-q" aria-expanded="false">
+          <span>Does it work on iPhone?</span>
+          <span class="faq-icon" aria-hidden="true"></span>
+        </button>
+        <div class="faq-a"><div class="faq-a-inner">
+          <p>It does. On iOS the file lands in the <strong>Files</strong> app under Downloads — from there you can move it to Photos. Safari, Chrome and Firefox on iOS are all supported, and nothing needs installing.</p>
+        </div></div>
+      </div>
+
+      <div class="faq-item glass reveal" data-reveal="up" data-delay="180">
+        <button class="faq-q" aria-expanded="false">
+          <span>Is Video-Hub free?</span>
+          <span class="faq-icon" aria-hidden="true"></span>
+        </button>
+        <div class="faq-a"><div class="faq-a-inner">
+          <p>Completely. No subscription, no download limit, no account. There's nothing to unlock and nothing to pay for.</p>
+        </div></div>
+      </div>
+
+      <div class="faq-item glass reveal" data-reveal="up" data-delay="240">
+        <button class="faq-q" aria-expanded="false">
+          <span>Can I download Facebook videos?</span>
+          <span class="faq-icon" aria-hidden="true"></span>
+        </button>
+        <div class="faq-a"><div class="faq-a-inner">
+          <p>Public Facebook videos, Reels and Watch clips are supported in both HD and SD. Copy the post link from the share menu and paste it above. Videos from private groups or profiles can't be fetched.</p>
+        </div></div>
+      </div>
+
+      <div class="faq-item glass reveal" data-reveal="up" data-delay="300">
+        <button class="faq-q" aria-expanded="false">
+          <span>Are the downloads stored on your servers?</span>
+          <span class="faq-icon" aria-hidden="true"></span>
+        </button>
+        <div class="faq-a"><div class="faq-a-inner">
+          <p>No. Nothing is kept — no links, no files, no history. Please only download content you own or have permission to use, and respect each platform's terms of service.</p>
+        </div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CONTACT / CTA ============ -->
+<section class="section" id="contact">
+  <div class="container">
+    <div class="cta-card glass tilt reveal" data-reveal="zoom">
+      <div class="cta-glow" aria-hidden="true"></div>
+      <h2 class="cta-title">Ready to grab your <span class="gradient-text">first video?</span></h2>
+      <p class="cta-sub">Scroll back up, paste a link and you're done in about ten seconds.</p>
+      <div class="cta-actions">
+        <a href="#home" class="btn-download btn-cta ripple">
+          <span class="btn-label">Start Downloading</span>
+        </a>
+        <a href="mailto:hello@video-hub.app" class="btn-ghost">Contact Us</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ============ FOOTER ============ -->
+<footer class="footer">
+  <div class="footer-border" aria-hidden="true"></div>
+  <div class="container footer-inner">
+    <div class="footer-brand">
+      <a href="#home" class="nav-logo">
+        <span class="nav-logo-icon">🎬</span>
+        <span class="nav-logo-text">Video-Hub</span>
+      </a>
+      <p class="footer-tagline">Download TikTok, Instagram &amp; Facebook videos instantly. Free forever, no login required.</p>
+    </div>
+
+    <nav class="footer-links" aria-label="Footer">
+      <a href="#privacy">Privacy Policy</a>
+      <a href="#terms">Terms</a>
+      <a href="mailto:hello@video-hub.app">Contact</a>
+      <a href="https://github.com" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </nav>
+  </div>
+  <p class="copyright">© <span id="year">2026</span> Video-Hub. Built with HTML, CSS &amp; vanilla JavaScript.</p>
+</footer>
+
+<!-- ============ TOAST / WARNING ============ -->
+<div class="toast-stack" id="toastStack" aria-live="assertive" aria-atomic="true"></div>
+
+<!-- ============ BACK TO TOP ============ -->
+<button class="to-top" id="toTop" aria-label="Back to top">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>
+</button>
+
+<script src="script.js"></script>
+</body>
+</html>

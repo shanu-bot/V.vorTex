@@ -1,0 +1,6 @@
+# node_modules is installed inside the image; copying the host's would both
+# bloat the build context and risk shipping platform-specific binaries.
+node_modules
+npm-debug.log
+.env
+README.md

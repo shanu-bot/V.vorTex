@@ -1,0 +1,26 @@
+# Dependencies — reinstalled from package.json, never committed
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# OS noise
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Build & scratch output
+dist/
+build/
+*.log
+tmp/

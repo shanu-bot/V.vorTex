@@ -1,0 +1,128 @@
+# Video-Hub API
+
+The resolver behind the Download buttons. The website itself is static and can
+live on GitHub Pages; this part cannot, because it has to run `yt-dlp`.
+
+## Why this is needed at all
+
+A browser can't fetch a TikTok/Instagram/Facebook video directly:
+
+- **CORS** — those sites send no `Access-Control-Allow-Origin`, so JavaScript on
+  your domain is blocked from reading their pages.
+- **Signed URLs** — the real MP4 is behind a tokenized, expiring link that you
+  can't derive from the page URL.
+
+So a server resolves the link, then streams the file back with a
+`Content-Disposition` header. That header is also what makes phones *save* the
+file instead of opening it in a player.
+
+## Endpoints
+
+| Route | Purpose |
+|---|---|
+| `GET /api/health` | Liveness check. Returns `{"ok":true}`. |
+| `GET /api/info?url=<link>` | Metadata: title, duration, quality, size, thumbnail. |
+| `GET /api/download?url=<link>&format=hd\|sd\|mp3` | The file, streamed. |
+
+## Run it locally
+
+Needs [Docker](https://www.docker.com/products/docker-desktop/).
+
+```bash
+cd server
+docker build -t video-hub-api .
+docker run --rm -p 8080:8080 video-hub-api
+```
+
+Check it:
+
+```bash
+curl "http://localhost:8080/api/health"
+curl "http://localhost:8080/api/info?url=https://www.tiktok.com/@user/video/123"
+```
+
+Then set this in `script.js` and open `index.html`:
+
+```js
+const API_BASE = "http://localhost:8080";
+```
+
+### Without Docker
+
+You need Node 18+, Python 3, `ffmpeg`, and `yt-dlp` on your PATH:
+
+```bash
+pip install yt-dlp
+cd server && npm install && npm start
+```
+
+## Deploy free (Render)
+
+1. Push this repo to GitHub.
+2. On [render.com](https://render.com) → **New** → **Web Service** → pick the repo.
+3. Set **Root Directory** to `server` and **Runtime** to **Docker**. Render reads
+   the `Dockerfile` and ignores the rest.
+4. Instance type: **Free**.
+5. Add an environment variable:
+
+   | Key | Value |
+   |---|---|
+   | `ALLOWED_ORIGINS` | `https://<your-username>.github.io` |
+
+6. Deploy, then copy the URL Render gives you (e.g.
+   `https://video-hub-api.onrender.com`) into `API_BASE` in `script.js`.
+
+Railway and Fly.io work the same way — both detect the `Dockerfile`.
+
+> **Free tier sleeps.** Render idles the service after ~15 minutes of no
+> traffic, and the next request takes ~50s to wake it. The frontend already
+> handles this: it shows *"Can't reach the server. It may be waking up"* rather
+> than hanging. It's not a bug, it's the free plan.
+
+## Configuration
+
+| Variable | Default | Notes |
+|---|---|---|
+| `PORT` | `8080` | Your host usually sets this. Don't hardcode it. |
+| `ALLOWED_ORIGINS` | *(any)* | Comma-separated. **Set this in production** or anyone can point their site at your server and burn your bandwidth. |
+| `YTDLP_PATH` | `yt-dlp` | Override if it isn't on PATH. |
+| `FFMPEG_PATH` | `ffmpeg` | Only used by the `mp3` route. |
+
+## Maintenance — the part people skip
+
+**The platforms change their pages, and yt-dlp chases them.** When downloads
+suddenly start failing across the board, yt-dlp is almost always the cause, and
+the fix is to bump the pinned version in the `Dockerfile`:
+
+```dockerfile
+ARG YTDLP_VERSION=2026.07.04    # <- raise this, then redeploy
+```
+
+Latest tags: <https://github.com/yt-dlp/yt-dlp/releases>
+
+It's pinned rather than tracking `latest` on purpose — otherwise your image
+changes silently between deploys and a bad upstream release becomes a mystery
+outage you can't correlate to anything you did.
+
+## Security notes
+
+- **SSRF is the real risk here** and `classify()` in `server.js` is the control.
+  `url` is user input handed to a tool that will fetch nearly any address, so
+  the hostname is matched against an exact-suffix allowlist and only `http(s)`
+  is permitted. Without it, someone passes a cloud-metadata or internal address
+  and this server fetches it for them. **Don't loosen that function.**
+- yt-dlp is spawned with an argument array and no shell, so a URL can never be
+  interpreted as a command.
+- Rate limited to 20 requests/minute per IP, in memory. That's per-process — if
+  you ever run more than one instance, move it to Redis or each instance will
+  hand out its own budget.
+- The container runs as the non-root `node` user.
+
+## Legal
+
+This fetches content you don't own. Downloading is fine for content that's
+yours, that's licensed for it, or that falls under local fair-use/private-copy
+rules — and redistributing someone else's video generally isn't. Automated
+downloading also breaches the terms of service of all three platforms, and
+that's on the operator of the deployment, not the code. If you put this on a
+public URL, you're the operator.

@@ -1,0 +1,14 @@
+# Normalize line endings so a Windows checkout doesn't produce CRLF files that
+# break on the Linux box the API actually runs on.
+* text=auto
+
+# These are consumed by Linux tooling and must be LF regardless of platform.
+Dockerfile text eol=lf
+*.sh text eol=lf
+
+# Never let Git rewrite bytes inside binaries.
+*.png binary
+*.jpg binary
+*.mp4 binary
+*.mp3 binary
+*.woff2 binary
