@@ -22,16 +22,39 @@
        Leave "" and the live site stays in DEMO MODE: the flow works end to
        end, but the buttons only toast instead of downloading.
 
-     DEV_API: used automatically when you're running the site locally, so you
-       can test against `npm start` without editing this file before every
-       push -- and without shipping a localhost URL to GitHub Pages by mistake.
+     Locally, `npm start` serves this page FROM the API server, so the API is
+     simply wherever this page came from -- location.origin. That's why we don't
+     hardcode a dev URL: hardcoding "localhost" would break the moment you open
+     the site from your phone, where localhost means the phone itself.
+
+     Opened as a file:// path there is no origin, so it falls back to PROD_API
+     (i.e. demo mode) -- which is correct, since nothing is serving the API then.
      ======================================================================== */
 
-  const PROD_API = "";                       // e.g. "https://video-hub-api.onrender.com"
-  const DEV_API = "http://localhost:8080";
+  const PROD_API = "";   // e.g. "https://video-hub-api.onrender.com"
 
-  const IS_LOCAL = ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
-  const API_BASE = IS_LOCAL ? DEV_API : PROD_API;
+  /**
+   * True on localhost and on private LAN addresses (your phone on the same
+   * wifi). Matches the full dotted quad rather than a prefix -- a bare
+   * /^192\.168\./ test would also match the hostname "192.168.evil.com".
+   */
+  function isLocalHost(h) {
+    if (h === "localhost" || h === "::1") return true;
+
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+    if (!m) return false;
+
+    const oct = m.slice(1).map(Number);
+    if (oct.some((o) => o > 255)) return false;
+
+    const [a, b] = oct;
+    return a === 127 ||                       // loopback
+           a === 10 ||                        // 10.0.0.0/8
+           (a === 192 && b === 168) ||        // 192.168.0.0/16
+           (a === 172 && b >= 16 && b <= 31); // 172.16.0.0/12
+  }
+
+  const API_BASE = isLocalHost(location.hostname) ? location.origin : PROD_API;
 
   /* ========================================================================
      01. HELPERS
