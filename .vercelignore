@@ -1,0 +1,13 @@
+# Vercel hosts the website only. The API lives on Render because it needs to run
+# yt-dlp and ffmpeg — real binaries, in Docker — which Vercel's serverless
+# runtime cannot do.
+#
+# Without this, Vercel sees server/package.json and tries to build a Node app.
+server/
+node_modules/
+
+# Repo furniture Vercel has no use for
+README.md
+render.yaml
+.nojekyll
+.gitattributes

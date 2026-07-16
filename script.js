@@ -706,7 +706,9 @@
         // letting the click look like it silently failed.
         if (!API_BASE) {
           e.preventDefault();
-          toast("info", `${kind} — demo mode. Set API_BASE in script.js for real downloads.`);
+          // Name the constant that actually exists -- API_BASE is derived by the
+          // probe and isn't something you can set by hand.
+          toast("info", `${kind} — demo mode. Set PROD_API in script.js to your API URL.`);
           return;
         }
 
