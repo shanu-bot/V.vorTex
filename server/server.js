@@ -347,9 +347,38 @@ app.get("/api/download", rateLimit, async (req, res) => {
   });
 });
 
+/* --------------------------------------------------------------------------
+   Local dev convenience: if index.html is sitting next to us (i.e. you ran
+   `npm start` from a checkout, rather than the container, which only copies
+   server.js), serve the site from here too. Same origin means CORS never
+   enters the picture while you're testing.
+
+   This never activates in production: the Docker image has no index.html.
+
+   dotfiles:"deny" is load-bearing. serve-static's default only ignores dotfiles
+   at the root -- it happily serves files *inside* a dot-directory, so .git/config
+   would be readable. This listens on all interfaces, so that's everyone on your
+   network, not just you.
+   -------------------------------------------------------------------------- */
+
+const path = require("path");
+const fs = require("fs");
+
+const SITE_DIR = path.join(__dirname, "..");
+const SERVE_SITE = fs.existsSync(path.join(SITE_DIR, "index.html"));
+
+if (SERVE_SITE) {
+  app.use(express.static(SITE_DIR, {
+    index: "index.html",
+    extensions: ["html"],
+    dotfiles: "deny"
+  }));
+}
+
 app.use((_req, res) => res.status(404).json({ error: "Not found." }));
 
 app.listen(PORT, () => {
   console.log(`Video-Hub API listening on :${PORT}`);
   console.log(`CORS origins: ${allowed.length ? allowed.join(", ") : "(any)"}`);
+  if (SERVE_SITE) console.log(`Site served from ${SITE_DIR} -> http://localhost:${PORT}`);
 });

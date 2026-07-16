@@ -15,20 +15,23 @@
   "use strict";
 
   /* ========================================================================
-     00. CONFIG  <-- the only line you need to edit
+     00. CONFIG  <-- the only thing you need to edit
      ========================================================================
 
-     Point this at your deployed API (see server/README.md), with no trailing
-     slash. For example:
+     PROD_API: your deployed API (see server/README.md), no trailing slash.
+       Leave "" and the live site stays in DEMO MODE: the flow works end to
+       end, but the buttons only toast instead of downloading.
 
-       const API_BASE = "https://video-hub-api.onrender.com";
-
-     Left empty, the site runs in DEMO MODE: the flow works end to end but the
-     buttons only toast instead of downloading. That keeps GitHub Pages usable
-     before the backend exists.
+     DEV_API: used automatically when you're running the site locally, so you
+       can test against `npm start` without editing this file before every
+       push -- and without shipping a localhost URL to GitHub Pages by mistake.
      ======================================================================== */
 
-  const API_BASE = "";
+  const PROD_API = "";                       // e.g. "https://video-hub-api.onrender.com"
+  const DEV_API = "http://localhost:8080";
+
+  const IS_LOCAL = ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
+  const API_BASE = IS_LOCAL ? DEV_API : PROD_API;
 
   /* ========================================================================
      01. HELPERS
