@@ -1,0 +1,32 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# With this file in the repo root you can use New > Blueprint on Render and it
+# configures the service itself, instead of you filling the form in by hand.
+#
+# Only the API is deployed here. The website (index.html / style.css /
+# script.js) is static and belongs on GitHub Pages — Render would just be a
+# more expensive way to serve three files.
+
+services:
+  - type: web
+    name: video-hub-api
+    runtime: docker
+    plan: free
+
+    # Build from server/, not the repo root. dockerfilePath is resolved
+    # relative to rootDir.
+    rootDir: server
+    dockerfilePath: ./Dockerfile
+
+    healthCheckPath: /api/health
+
+    envVars:
+      # Set this to your GitHub Pages origin once you know it, e.g.
+      #   https://<your-username>.github.io
+      # Comma-separate for more than one. Leaving it unset allows any origin,
+      # which means anyone can point their own site at your server and spend
+      # your bandwidth — and on the free plan that is only 5 GB/month.
+      # sync: false makes Render prompt for it at deploy instead of baking a
+      # value into the repo.
+      - key: ALLOWED_ORIGINS
+        sync: false
