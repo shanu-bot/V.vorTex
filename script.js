@@ -18,43 +18,61 @@
      00. CONFIG  <-- the only thing you need to edit
      ========================================================================
 
-     PROD_API: your deployed API (see server/README.md), no trailing slash.
-       Leave "" and the live site stays in DEMO MODE: the flow works end to
-       end, but the buttons only toast instead of downloading.
+     The API is found automatically. On boot we ask whatever server handed us
+     this page whether it also answers /api/health:
 
-     Locally, `npm start` serves this page FROM the API server, so the API is
-     simply wherever this page came from -- location.origin. That's why we don't
-     hardcode a dev URL: hardcoding "localhost" would break the moment you open
-     the site from your phone, where localhost means the phone itself.
+       yes -> use it (same origin). Covers `npm start`, your phone on the LAN,
+              and a Cloudflare tunnel, with nothing to configure. The tunnel is
+              the reason this is a probe rather than a hostname check: a quick
+              tunnel's subdomain is random and changes on every restart, so it
+              could never have been hardcoded.
+       no  -> fall back to PROD_API. Covers GitHub Pages, where the site is
+              static and the API lives on a different host entirely.
 
-     Opened as a file:// path there is no origin, so it falls back to PROD_API
-     (i.e. demo mode) -- which is correct, since nothing is serving the API then.
+     PROD_API: your separately-deployed API, no trailing slash. Left "", a
+     statically-hosted site stays in DEMO MODE -- the flow works end to end, but
+     the buttons only toast instead of downloading.
      ======================================================================== */
 
   const PROD_API = "";   // e.g. "https://video-hub-api.onrender.com"
 
+  // Resolved by probeApi() before any download runs. Never read this directly
+  // without awaiting apiReady first.
+  let API_BASE = PROD_API;
+
   /**
-   * True on localhost and on private LAN addresses (your phone on the same
-   * wifi). Matches the full dotted quad rather than a prefix -- a bare
-   * /^192\.168\./ test would also match the hostname "192.168.evil.com".
+   * Ask the current origin whether it is also our API.
+   * Short timeout on purpose: on a static host this request is *expected* to
+   * fail, and the page must never stall waiting for it.
    */
-  function isLocalHost(h) {
-    if (h === "localhost" || h === "::1") return true;
+  async function probeApi() {
+    // file:// has no real origin, so there is nothing to probe.
+    if (location.protocol === "file:") return (API_BASE = PROD_API);
 
-    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
-    if (!m) return false;
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 2500);
+      const res = await fetch(location.origin + "/api/health", {
+        signal: ctrl.signal,
+        cache: "no-store"
+      });
+      clearTimeout(timer);
 
-    const oct = m.slice(1).map(Number);
-    if (oct.some((o) => o > 255)) return false;
-
-    const [a, b] = oct;
-    return a === 127 ||                       // loopback
-           a === 10 ||                        // 10.0.0.0/8
-           (a === 192 && b === 168) ||        // 192.168.0.0/16
-           (a === 172 && b >= 16 && b <= 31); // 172.16.0.0/12
+      // A 200 alone isn't proof: a static host may serve a 200 index page for
+      // unknown paths. Require the actual health payload.
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data && data.ok === true) return (API_BASE = location.origin);
+      }
+    } catch {
+      // Not same-origin, or nothing listening. Fall through to PROD_API.
+    }
+    return (API_BASE = PROD_API);
   }
 
-  const API_BASE = isLocalHost(location.hostname) ? location.origin : PROD_API;
+  // Start the probe immediately; startDownload awaits it before deciding.
+  const apiReady = probeApi();
+
 
   /* ========================================================================
      01. HELPERS
@@ -504,7 +522,12 @@
     btn.setAttribute("aria-busy", "true");
 
     try {
-      // ---- Demo mode: no backend configured ----
+      // The probe starts at boot and is almost always settled by the time
+      // anyone clicks, but await it so a fast click can't read API_BASE early
+      // and wrongly fall into demo mode.
+      await apiReady;
+
+      // ---- Demo mode: no backend reachable ----
       if (!API_BASE) {
         await wait(1200);
         showResult(key, url, null);

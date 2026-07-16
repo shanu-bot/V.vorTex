@@ -12,10 +12,34 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
 
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>" />
+<!-- Same mark as the header, flattened to solid brand colours (a data: URI
+     favicon can't reference the page's gradient defs). %23 is an escaped '#'. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'><g fill='none' stroke-width='4.6' stroke-linecap='round'><circle cx='24' cy='24' r='17' stroke='%232563EB' stroke-dasharray='30 76.81'/><circle cx='24' cy='24' r='17' stroke='%2310B981' stroke-dasharray='30 76.81' stroke-dashoffset='-35.6'/><circle cx='24' cy='24' r='17' stroke='%23FACC15' stroke-dasharray='30 76.81' stroke-dashoffset='-71.2'/></g><path d='M20.6 16.9 32.4 24 20.6 31.1Z' fill='%232563EB' stroke='%232563EB' stroke-width='2.6' stroke-linejoin='round'/></svg>" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+
+<!-- ============ LOGO GRADIENTS ============
+     Defined once and referenced by every copy of the mark, so the shapes can be
+     inlined (which keeps them stylable from CSS -- a <use> reference would hide
+     them in a shadow tree that outside selectors cannot reach) while no id is
+     ever duplicated. -->
+<svg class="svg-defs" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="vhBlue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7cb6ff" /><stop offset="1" stop-color="#2563EB" />
+    </linearGradient>
+    <linearGradient id="vhGreen" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4ade9f" /><stop offset="1" stop-color="#10B981" />
+    </linearGradient>
+    <linearGradient id="vhYellow" x1="1" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#fde68a" /><stop offset="1" stop-color="#FACC15" />
+    </linearGradient>
+    <linearGradient id="vhPlay" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#93c5fd" /><stop offset="1" stop-color="#2563EB" />
+    </linearGradient>
+  </defs>
+</svg>
 
 <!-- ============ PAGE LOADER ============ -->
 <div class="page-loader" id="pageLoader">
@@ -41,7 +65,15 @@
 <header class="navbar" id="navbar">
   <nav class="nav-inner container" aria-label="Main navigation">
     <a href="#home" class="nav-logo">
-      <span class="nav-logo-icon">🎬</span>
+      <svg class="logo-mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <g class="lm-ring" fill="none" stroke-width="4.6" stroke-linecap="round">
+          <circle cx="24" cy="24" r="17" stroke="url(#vhBlue)" stroke-dasharray="30 76.81" />
+          <circle cx="24" cy="24" r="17" stroke="url(#vhGreen)" stroke-dasharray="30 76.81" stroke-dashoffset="-35.6" />
+          <circle cx="24" cy="24" r="17" stroke="url(#vhYellow)" stroke-dasharray="30 76.81" stroke-dashoffset="-71.2" />
+        </g>
+        <path class="lm-play" d="M20.6 16.9 32.4 24 20.6 31.1Z" fill="url(#vhPlay)"
+              stroke="url(#vhPlay)" stroke-width="2.6" stroke-linejoin="round" />
+      </svg>
       <span class="nav-logo-text">Video-Hub</span>
     </a>
 
@@ -90,7 +122,15 @@
     </div>
 
     <h1 class="hero-title reveal" data-reveal="up">
-      <span class="hero-logo-icon">🎬</span>
+      <svg class="logo-mark hero-logo-mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <g class="lm-ring" fill="none" stroke-width="4.6" stroke-linecap="round">
+          <circle cx="24" cy="24" r="17" stroke="url(#vhBlue)" stroke-dasharray="30 76.81" />
+          <circle cx="24" cy="24" r="17" stroke="url(#vhGreen)" stroke-dasharray="30 76.81" stroke-dashoffset="-35.6" />
+          <circle cx="24" cy="24" r="17" stroke="url(#vhYellow)" stroke-dasharray="30 76.81" stroke-dashoffset="-71.2" />
+        </g>
+        <path class="lm-play" d="M20.6 16.9 32.4 24 20.6 31.1Z" fill="url(#vhPlay)"
+              stroke="url(#vhPlay)" stroke-width="2.6" stroke-linejoin="round" />
+      </svg>
       <span class="gradient-text shimmer">Video-Hub</span>
     </h1>
 
@@ -522,7 +562,15 @@
   <div class="container footer-inner">
     <div class="footer-brand">
       <a href="#home" class="nav-logo">
-        <span class="nav-logo-icon">🎬</span>
+        <svg class="logo-mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+          <g class="lm-ring" fill="none" stroke-width="4.6" stroke-linecap="round">
+            <circle cx="24" cy="24" r="17" stroke="url(#vhBlue)" stroke-dasharray="30 76.81" />
+            <circle cx="24" cy="24" r="17" stroke="url(#vhGreen)" stroke-dasharray="30 76.81" stroke-dashoffset="-35.6" />
+            <circle cx="24" cy="24" r="17" stroke="url(#vhYellow)" stroke-dasharray="30 76.81" stroke-dashoffset="-71.2" />
+          </g>
+          <path class="lm-play" d="M20.6 16.9 32.4 24 20.6 31.1Z" fill="url(#vhPlay)"
+                stroke="url(#vhPlay)" stroke-width="2.6" stroke-linejoin="round" />
+        </svg>
         <span class="nav-logo-text">Video-Hub</span>
       </a>
       <p class="footer-tagline">Download TikTok, Instagram &amp; Facebook videos instantly. Free forever, no login required.</p>

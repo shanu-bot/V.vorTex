@@ -27,6 +27,10 @@
   --green-soft: rgba(16, 185, 129, 0.16);
   --yellow-soft: rgba(250, 204, 21, 0.16);
 
+  /* A lighter tint of --blue. #2563EB is too dark to read as a lit edge or a
+     small label against the dark ground; this is the same hue, lifted. */
+  --blue-lite: #60a5fa;
+
   /* Surface */
   --bg: #060b18;
   --bg-2: #0a1122;
@@ -391,20 +395,43 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   gap: 1.5rem;
 }
 
-.nav-logo { display: inline-flex; align-items: center; gap: 0.55rem; font-weight: 700; }
-.nav-logo-icon {
-  font-size: 1.5rem;
-  filter: drop-shadow(0 0 10px rgba(37, 99, 235, 0.7));
-  animation: logoWobble 5s var(--ease) infinite;
+.nav-logo { display: inline-flex; align-items: center; gap: 0.6rem; font-weight: 700; }
+
+/* ---- Logo mark ----
+   Three arcs struck from one circle: a 30-unit dash on a 106.81 circumference
+   (2*pi*17), offset by a third of the way round each time. Drawing it with
+   dasharray rather than three hand-plotted arc paths means the geometry stays
+   exact and the gaps stay even if the radius is ever changed. */
+
+/* Holds the shared gradient defs; must occupy no space but stay renderable,
+   so no display:none. */
+.svg-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+.logo-mark {
+  width: 1.85rem;
+  height: 1.85rem;
+  flex-shrink: 0;
+  overflow: visible;
+  filter: drop-shadow(0 2px 9px rgba(37, 99, 235, 0.5));
+  transition: filter var(--t) var(--ease);
 }
-@keyframes logoWobble {
-  0%, 100% { transform: rotate(0) scale(1); }
-  40% { transform: rotate(-9deg) scale(1.12); }
-  70% { transform: rotate(6deg) scale(1.05); }
+.lm-ring,
+.lm-play {
+  /* Without transform-box the origin resolves against the border box, not the
+     viewBox, and the mark rotates around its corner. */
+  transform-box: view-box;
+  transform-origin: 50% 50%;
 }
+.lm-ring { transition: transform 0.8s var(--ease); }
+.lm-play { transition: transform 0.45s var(--ease-bounce); }
+
+.nav-logo:hover .lm-ring { transform: rotate(180deg); }
+.nav-logo:hover .lm-play { transform: scale(1.22); }
+.nav-logo:hover .logo-mark { filter: drop-shadow(0 3px 16px rgba(16, 185, 129, 0.75)); }
+
 .nav-logo-text {
-  font-size: 1.2rem;
-  letter-spacing: -0.02em;
+  font-size: 1.24rem;
+  letter-spacing: -0.03em;
   background: linear-gradient(95deg, var(--blue), var(--green), var(--yellow));
   background-size: 200% 100%;
   -webkit-background-clip: text;
@@ -522,14 +549,26 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   line-height: 1.05;
   letter-spacing: -0.035em;
 }
-.hero-logo-icon {
-  font-size: 0.85em;
-  filter: drop-shadow(0 12px 28px rgba(37, 99, 235, 0.55));
+/* Hero copy of the mark: bigger, and the ring turns slowly on its own. The
+   float animates the <svg>; the spin animates the <g> inside it, so the two
+   never fight over the same transform. */
+.hero-logo-mark {
+  width: 0.98em;
+  height: 0.98em;
+  filter: drop-shadow(0 12px 30px rgba(37, 99, 235, 0.55));
   animation: heroIconFloat 4.5s ease-in-out infinite;
 }
+.hero-logo-mark .lm-ring { animation: ringSpin 22s linear infinite; }
+.hero-logo-mark .lm-play { animation: playPulse 4.5s ease-in-out infinite; }
+
 @keyframes heroIconFloat {
-  0%, 100% { transform: translateY(0) rotate(-4deg); }
-  50% { transform: translateY(-14px) rotate(4deg); }
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-14px); }
+}
+@keyframes ringSpin { to { transform: rotate(360deg); } }
+@keyframes playPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
 }
 
 .hero-subtitle {
@@ -688,37 +727,60 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   align-items: stretch;
 }
 
-/* ---- Input ---- */
+/* ---- Input ----
+
+   The field background is OPAQUE on purpose. It used to be rgba(4,8,20,.55),
+   which let the ::before glow bleed straight up through the field and wash the
+   whole input blue-green. The glow belongs *around* the border, so whatever
+   sits in front of it has to be solid.
+
+   Note there's no `isolation` or `z-index` here either: .input-wrap must NOT
+   form a stacking context, or ::before{z-index:-1} would paint above this
+   background instead of behind it, and we'd be right back to the wash.
+   -------------------------------------------------------------------------- */
 .input-wrap {
   position: relative;
   flex: 1;
   min-width: 0;
   border-radius: 16px;
-  background: rgba(4, 8, 20, 0.55);
+  background: #070d1c;
   border: 1.5px solid var(--glass-brd);
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease),
               transform var(--t) var(--ease);
 }
+
+/* Soft halo behind the field. Only the blurred spill past the edges shows. */
 .input-wrap::before {
   content: "";
   position: absolute;
   inset: -1.5px;
   z-index: -1;
   border-radius: inherit;
-  background: linear-gradient(100deg, var(--blue), var(--green), var(--yellow));
+  background: linear-gradient(100deg, var(--blue), var(--blue-lite), var(--green));
   background-size: 200% 100%;
   opacity: 0;
-  filter: blur(9px);
+  filter: blur(12px);
   transition: opacity var(--t);
   animation: gradShift 5s var(--ease) infinite;
 }
+
+/* Focus reads through a steady lit border + halo. No travelling arc: the state
+   change is instant, only the fade in/out is eased. */
 .input-wrap.focused {
-  border-color: transparent;
+  border-color: var(--blue-lite);
   transform: translateY(-2px);
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.55), 0 12px 40px rgba(37, 99, 235, 0.25);
+  box-shadow: 0 0 0 1.5px rgba(37, 99, 235, 0.5), 0 12px 40px rgba(37, 99, 235, 0.28);
 }
-.input-wrap.focused::before { opacity: 0.85; }
-.input-wrap.valid { box-shadow: 0 0 0 2px var(--green), 0 12px 40px rgba(16, 185, 129, 0.28); }
+.input-wrap.focused::before { opacity: 0.9; }
+
+/* Green is the "we recognise this platform" signal, so it overrides focus blue. */
+.input-wrap.valid {
+  border-color: var(--green);
+  box-shadow: 0 0 0 1.5px var(--green), 0 12px 40px rgba(16, 185, 129, 0.28);
+}
+.input-wrap.valid::before {
+  background: linear-gradient(100deg, var(--green), var(--blue-lite), var(--green));
+}
 .input-wrap.invalid {
   border-color: var(--yellow);
   box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.6);
@@ -762,9 +824,12 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .url-input:not(:placeholder-shown) + .float-label {
   transform: translateY(-140%) scale(0.78);
   transform-origin: left center;
-  color: var(--green);
+  color: var(--blue-lite);
   font-weight: 500;
 }
+/* Green is reserved for "we recognise this platform" -- it shouldn't fire on
+   focus alone. Same specificity as the rule above, so order carries it. */
+.input-wrap.valid .float-label { color: var(--green); }
 
 /* Detected-platform badge inside the field */
 .input-platform {
