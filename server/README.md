@@ -304,6 +304,55 @@ download returned `200` with zero bytes.
 
 The classification for this failure is `format_unavailable`.
 
+### Instagram post shape
+
+A `/p/` link can be one photo, one video, or a carousel mixing both, and until
+recently this server could only see the first of those properly — yt-dlp with
+`--no-playlist` returns one video and says nothing about its siblings, and the
+gallery-dl fallback treated every URL it got back as a photo.
+
+For `/p/`, `/reel/`, `/reels/` and `/stories/` URLs, `/api/info` now adds two
+keys:
+
+```json
+{
+  "kind": "carousel",
+  "postType": "carousel",
+  "itemCount": 3,
+  "items": [
+    { "index": 0, "type": "photo", "download": "/api/download?url=…&format=photo&i=0", "thumbnail": "https://…/1_n.jpg" },
+    { "index": 1, "type": "video", "download": "/api/download?url=…&format=photo&i=1", "thumbnail": "https://…/poster_n.jpg" },
+    { "index": 2, "type": "photo", "download": "/api/download?url=…&format=photo&i=2", "thumbnail": "https://…/2_n.webp" }
+  ]
+}
+```
+
+`postType` is `single_photo`, `single_video` or `carousel`.
+
+**Additive.** Every field that existed before still means what it meant, so a
+client ignoring these two keys behaves exactly as it did. `kind` only gains a
+new value — `carousel` — for the case that was previously *misreported* rather
+than reported differently. TikTok, Facebook and YouTube never enter this branch
+and their responses are unchanged.
+
+`download` is a path, not an absolute URL: the server sits behind a proxy and
+does not reliably know its own public origin, and the client already has that.
+It points at the existing item endpoint, so no new download route was added.
+
+Types and thumbnails come from `gallery-dl --dump-json`, whose Instagram
+metadata carries `typename`, `video_url`, and `display_url` — the last being the
+still frame *even for videos*, which is how a carousel gets a thumbnail for an
+item that isn't a photo. If that call fails, `-g` is the fallback and the type
+is inferred from the URL; thumbnails are then unavailable for video items.
+
+The two lookups run concurrently, so Instagram doesn't get slower for needing
+both. A failed item lookup never fails `/api/info` — it degrades to the
+behaviour that existed before.
+
+One related fix: the item download route derived its file extension assuming an
+image, so a carousel video would have been saved as `.jpg`. It now follows the
+CDN's content-type.
+
 ### Errors
 
 Every failure returns the same shape, and the message is the tool's own text

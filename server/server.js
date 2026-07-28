@@ -1036,12 +1036,200 @@ function isAllowedMedia(raw) {
   return MEDIA_HOSTS.some((b) => host === b || host.endsWith("." + b));
 }
 
+/* --------------------------------------------------------------------------
+   Instagram post shape
+
+   A /p/ link can be one photo, one video, or a carousel mixing both, and this
+   server could only ever see the first of those properly: yt-dlp with
+   --no-playlist returns one video and says nothing about its siblings, and the
+   gallery-dl fallback treated every URL it got back as a photo.
+
+   `gallery-dl --dump-json` carries the metadata that settles it -- `typename`
+   (GraphImage / GraphVideo / GraphSidecar), `video_url` when an item is a
+   video, and `display_url`, which is the still frame *even for videos*, so a
+   carousel can show a thumbnail for an item that is not a photo.
+
+   `-g` stays as the fallback. It has been in use here for a while, and
+   inferring type from the file extension is worse than reading metadata but a
+   great deal better than calling everything a photo.
+   -------------------------------------------------------------------------- */
+
+/** The Instagram URL shapes that address a post rather than a profile. */
+const IG_POST_RE = /instagram\.com\/(?:[^/]+\/)?(?:p|reel|reels|stories)\//i;
+
+const VIDEO_EXT_RE = /\.(mp4|mov|m4v|webm)(?:$|[?#])/i;
+const PHOTO_EXT_RE = /\.(jpe?g|png|webp|heic|gif)(?:$|[?#])/i;
+
+/** photo | video, from whatever evidence is available, best signal first. */
+function itemTypeFrom(mediaUrl, meta = {}) {
+  if (meta.video_url) return "video";
+  if (typeof meta.typename === "string" && /video/i.test(meta.typename)) return "video";
+  if (meta.is_video === true) return "video";
+  if (VIDEO_EXT_RE.test(mediaUrl)) return "video";
+  if (PHOTO_EXT_RE.test(mediaUrl)) return "photo";
+  // Instagram CDN paths are not reliably suffixed; a video URL almost always
+  // carries an mp4 marker somewhere, and what is left here is an image.
+  return /\bmp4\b/i.test(mediaUrl) ? "video" : "photo";
+}
+
+/**
+ * Parse `gallery-dl --dump-json` into media items.
+ *
+ * The output is an array of message tuples, and the ones that matter look like
+ * [3, "<url>", { ...metadata }]. Anything shaped differently is skipped rather
+ * than guessed at, so a change to gallery-dl's other message types cannot turn
+ * into a malformed item here.
+ *
+ * Pure, and exported, because this is the one part of the feature that can be
+ * tested without an Instagram session.
+ */
+function parseGalleryItems(jsonText) {
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  const items = [];
+  for (const msg of parsed) {
+    if (!Array.isArray(msg) || msg.length < 2) continue;
+    const mediaUrl = typeof msg[1] === "string" ? msg[1] : null;
+    if (!mediaUrl) continue;
+
+    const meta = msg.length > 2 && msg[2] && typeof msg[2] === "object" ? msg[2] : {};
+    const type = itemTypeFrom(mediaUrl, meta);
+
+    /* display_url is the still frame and exists for videos too, which is the
+       entire reason for preferring --dump-json. A photo is its own thumbnail. */
+    const thumbnail = typeof meta.display_url === "string" ? meta.display_url
+      : type === "photo" ? mediaUrl
+      : null;
+
+    items.push({ type, url: mediaUrl, thumbnail });
+  }
+  return items;
+}
+
+/** single_photo | single_video | carousel. Null when there is nothing to say. */
+function classifyPostType(items) {
+  if (!items || !items.length) return null;
+  if (items.length > 1) return "carousel";
+  return items[0].type === "video" ? "single_video" : "single_photo";
+}
+
+/**
+ * Media items for a post, richest source first.
+ *
+ * Never rejects: a post-shape lookup is an enhancement, and failing it must not
+ * fail /api/info. Callers get [] and fall back to the behaviour that existed
+ * before this could be asked.
+ */
+async function galleryItems(url, timeoutMs = 25_000) {
+  try {
+    const raw = await galleryDump(url, timeoutMs);
+    const items = parseGalleryItems(raw).filter((it) => isAllowedMedia(it.url));
+    if (items.length) return items;
+  } catch (e) {
+    console.warn(`[instagram] --dump-json failed (${e.code || e.message}); falling back to -g`);
+  }
+
+  try {
+    const urls = await galleryUrls(url, timeoutMs);
+    return urls.map((u) => ({
+      type: itemTypeFrom(u),
+      url: u,
+      thumbnail: itemTypeFrom(u) === "photo" ? u : null
+    }));
+  } catch (e) {
+    console.warn(`[instagram] item lookup failed entirely (${e.code || e.message})`);
+    return [];
+  }
+}
+
+/**
+ * The `postType` / `items` block added to an Instagram /api/info response.
+ *
+ * Additive on purpose. Every field that existed before still means what it
+ * meant, so a client that ignores these two keys behaves exactly as it did;
+ * `kind` only gains a new value ("carousel") for the case that was previously
+ * misreported rather than reported differently.
+ *
+ * `download` is a path rather than an absolute URL because the server sits
+ * behind a proxy and does not reliably know its own public origin -- the
+ * client already has that and prefixes API_BASE. It points at the existing
+ * item endpoint, so no new download route was needed.
+ *
+ * Returns {} when there is nothing to add, which keeps the spread at the call
+ * sites harmless for every other platform.
+ */
+function describePost(items, fallbackUrls, url, platform) {
+  if (platform !== "instagram") return {};
+
+  const list = items && items.length
+    ? items
+    : (fallbackUrls || []).map((u) => ({ type: itemTypeFrom(u), url: u, thumbnail: null }));
+
+  const postType = classifyPostType(list);
+  if (!postType) return {};
+
+  const q = encodeURIComponent(url);
+  return {
+    postType,
+    itemCount: list.length,
+    items: list.map((it, i) => ({
+      index: i,
+      type: it.type,
+      // The proxied endpoint, not the CDN URL: those are header-locked and
+      // expire, which is the reason this server exists at all.
+      download: `/api/download?url=${q}&format=photo&i=${i}`,
+      thumbnail: it.thumbnail || (it.type === "photo" ? it.url : null)
+    }))
+  };
+}
+
+/** Raw stdout of `gallery-dl --dump-json`. */
+function galleryDump(url, timeoutMs = 25_000) {
+  return new Promise((resolve, reject) => {
+    const jar = cookieSession();
+    const args = ["--dump-json", "--quiet", ...jar.args, url];
+    const child = spawn(GALLERYDL, args);
+
+    let out = "";
+    let err = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      jar.done();
+      reject(Object.assign(new Error("gallery-dl --dump-json timed out"), { code: "timeout" }));
+    }, timeoutMs);
+
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      jar.done();
+      reject(Object.assign(new Error(e.message), { code: "tool_missing" }));
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      jar.done();
+      if (code !== 0) {
+        return reject(Object.assign(new Error(meaningfulLines(err).join(" ") || `exit ${code}`), {
+          code: classifyError(err)
+        }));
+      }
+      resolve(out);
+    });
+  });
+}
+
 /**
  * Direct media URLs for a post, in order.
  *
- * Uses `-g` (one URL per line) rather than --dump-json: a line-per-URL contract
- * is far harder to misread than gallery-dl's JSON message tuples, and the URL
- * is all this route needs.
+ * Uses `-g` (one URL per line): a line-per-URL contract is hard to misread, and
+ * the URL is all the download route needs. galleryItems() prefers --dump-json
+ * when it wants types and thumbnails, and falls back to this.
  */
 function galleryUrls(url, timeoutMs = 25_000) {
   return new Promise((resolve, reject) => {
@@ -1295,6 +1483,15 @@ app.get("/api/info", rateLimit, async (req, res) => {
     return res.status(400).json({ error: "Unsupported link. Use TikTok, Instagram, Facebook or YouTube.", code: "unsupported_link", detail: null });
   }
 
+  /* Instagram only, and only for URLs that address a post. The item list is
+     what makes a mixed carousel describable at all, and it is asked for
+     alongside the yt-dlp extraction rather than after it -- both are network
+     round-trips, and running them in sequence would double the wait on the one
+     platform that needs both. Nothing else changes shape: TikTok, Facebook and
+     YouTube never enter this branch. */
+  const wantsItems = platform === "instagram" && IG_POST_RE.test(String(url));
+  const itemsPromise = wantsItems ? galleryItems(url) : Promise.resolve([]);
+
   try {
     let info;
     try {
@@ -1310,7 +1507,12 @@ app.get("/api/info", rateLimit, async (req, res) => {
       // is a real error and still propagates.
       if (!NO_VIDEO_RE.test(err.stderr || "")) throw err;
 
-      const photos = await galleryUrls(url);
+      const items = wantsItems ? await itemsPromise : [];
+      const photos = items.length
+        ? items.map((it) => it.url)
+        : await galleryUrls(url);
+
+      const shape = describePost(items, photos, url, platform);
       return res.json({
         kind: "photo",
         platform,
@@ -1320,7 +1522,8 @@ app.get("/api/info", rateLimit, async (req, res) => {
         quality: photos.length > 1 ? `${photos.length} photos` : "Original",
         size: null,      // the CDN reports it per-image; not worth 10 HEAD requests
         duration: null,
-        thumbnail: photos[0]
+        thumbnail: photos[0],
+        ...shape
       });
     }
 
@@ -1331,8 +1534,15 @@ app.get("/api/info", rateLimit, async (req, res) => {
     const height = info.height ||
       Math.max(0, ...(info.formats || []).map((f) => f.height || 0));
 
+    /* A video post can still be a carousel that happens to lead with a video --
+       yt-dlp reports only the one it picked, so the item list is what reveals
+       the rest. Awaited here rather than earlier so a slow or failing lookup
+       cannot hold up a plain video response. */
+    const items = wantsItems ? await itemsPromise : [];
+    const shape = describePost(items, items.map((it) => it.url), url, platform);
+
     res.json({
-      kind: "video",
+      kind: shape.postType === "carousel" ? "carousel" : "video",
       platform,
       platformName: PLATFORMS[platform].name,
       title: info.title || info.description?.slice(0, 90) || "Untitled video",
@@ -1340,7 +1550,8 @@ app.get("/api/info", rateLimit, async (req, res) => {
       duration: humanTime(info.duration),
       quality: height ? `${height}p${height >= 720 ? " • HD" : ""}` : "Best available",
       size: humanSize(size),
-      thumbnail: info.thumbnail || null
+      thumbnail: info.thumbnail || null,
+      ...shape
     });
   } catch (err) {
     console.error(`[${platform}] /api/info failed (${err.code || "?"}): ${err.stderr || err.message}`);
@@ -1738,8 +1949,19 @@ async function streamPhoto(req, res, url, index, platform) {
     });
   }
 
+  /* A carousel item is not necessarily a photo. This route proxies the Nth
+     media item whatever it is, so the extension follows the CDN's content-type
+     rather than assuming an image -- naming an mp4 ".jpg" produces a file the
+     visitor's device refuses to open, for no reason they can see. */
   const type = upstream.headers.get("content-type") || "image/jpeg";
-  const ext = type.includes("png") ? "png" : type.includes("webp") ? "webp" : "jpg";
+  const ext =
+    type.includes("mp4") ? "mp4" :
+    type.includes("quicktime") ? "mov" :
+    type.includes("webm") ? "webm" :
+    type.startsWith("video/") ? "mp4" :
+    type.includes("png") ? "png" :
+    type.includes("webp") ? "webp" :
+    type.includes("gif") ? "gif" : "jpg";
 
   // Name the file after the post's shortcode: the CDN URL is a signed blob
   // with nothing human-readable in it, and photo posts carry no title.
@@ -1959,8 +2181,23 @@ if (SERVE_SITE) {
 
 app.use((_req, res) => res.status(404).json({ error: "Not found.", code: "not_found", detail: null }));
 
-app.listen(PORT, () => {
-  console.log(`Vid VorTex API listening on :${PORT}`);
-  console.log(`CORS origins: ${allowed.length ? allowed.join(", ") : "(any)"}`);
-  if (SERVE_SITE) console.log(`Site served from ${SITE_DIR} -> http://localhost:${PORT}`);
-});
+/* Only listen when run directly. Requiring this file instead hands back the
+   pure helpers, which is what lets the Instagram post-shape parsing be tested
+   against fixtures -- the one part of that feature testable without a live
+   session. `node server.js` is unaffected. */
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Vid VorTex API listening on :${PORT}`);
+    console.log(`CORS origins: ${allowed.length ? allowed.join(", ") : "(any)"}`);
+    if (SERVE_SITE) console.log(`Site served from ${SITE_DIR} -> http://localhost:${PORT}`);
+  });
+}
+
+module.exports = {
+  app,
+  parseGalleryItems,
+  classifyPostType,
+  itemTypeFrom,
+  describePost,
+  IG_POST_RE
+};
