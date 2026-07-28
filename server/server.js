@@ -411,23 +411,94 @@ const FORMATS = {
   mp3: "bestaudio/best"
 };
 
+/* --------------------------------------------------------------------------
+   Extraction cache
+
+   An extraction is a real network round-trip to the platform -- measured at
+   3.4-3.9s against YouTube from a laptop, and worse from a cold free-tier box.
+   The site does one on /api/info and the download route used to do a second
+   one purely to learn the title, so every download paid for the same work
+   twice before a byte moved.
+
+   The frontend always calls /api/info and only then offers the button, so by
+   the time anyone clicks, the answer is already known. Caching it briefly
+   removes the second extraction from the common path entirely.
+
+   Short TTL on purpose: the plan embeds signed CDN URLs and a format list that
+   both go stale, and this is a latency cache, not a data store. A miss just
+   costs what the old code always paid.
+   -------------------------------------------------------------------------- */
+
+const PLAN_TTL_MS = 5 * 60_000;
+const plans = new Map();
+
+const planKey = (url, selector) => `${selector || ""} ${url}`;
+
+function cachedPlan(url, selector) {
+  const rec = plans.get(planKey(url, selector));
+  if (!rec) return null;
+  if (Date.now() - rec.at > PLAN_TTL_MS) {
+    plans.delete(planKey(url, selector));
+    return null;
+  }
+  return rec.info;
+}
+
+function rememberPlan(url, selector, info) {
+  plans.set(planKey(url, selector), { at: Date.now(), info });
+}
+
+// Same reason the rate-limit map gets swept: this process runs for weeks.
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, rec] of plans) if (now - rec.at > PLAN_TTL_MS) plans.delete(k);
+}, PLAN_TTL_MS).unref();
+
+/**
+ * What yt-dlp would actually download, read off a cached or fresh dump.
+ *
+ * Returns null when the dump didn't say -- callers treat that as "assume the
+ * worst and take the merge path", which is the old behaviour.
+ */
+function downloadPlan(info) {
+  const d = info?.requested_downloads?.[0];
+  if (!d || !d.format_id) return null;
+  return {
+    formatId: d.format_id,
+    ext: d.ext || null,
+    vcodec: d.vcodec || null,
+    // Present only when two streams have to be muxed. One stream means the
+    // file is already playable as-is and ffmpeg has nothing to do.
+    needsMerge: Array.isArray(d.requested_formats) && d.requested_formats.length > 1,
+    // Exact size only. filesize_approx is an estimate, and a wrong
+    // Content-Length truncates the download.
+    size: Number.isFinite(d.filesize) ? d.filesize : null
+  };
+}
+
 /** Run yt-dlp and buffer stdout. Used for metadata only, never for the video. */
-function ytdlpJson(url, timeoutMs = 25_000) {
+function ytdlpJson(url, timeoutMs = 25_000, selector = null) {
   return new Promise((resolve, reject) => {
     // Metadata is login-walled on exactly the same posts the media is, so this
     // needs the session as much as the download does -- without it /api/info
     // fails first and the download is never even attempted.
     const jar = cookieSession();
 
+    /* Passing the selector costs nothing and buys the download plan: with -f
+       and -S applied, the dump carries a `requested_downloads` entry naming
+       the exact format that would be fetched, and a `requested_formats` array
+       when that means merging two streams. One extraction answers both "what
+       is this?" and "will this need ffmpeg?", which is what lets the download
+       route skip its own probe entirely. */
+    const args = ["-J", "--no-playlist", "--no-warnings", "--socket-timeout", "15"];
+    if (selector) {
+      args.push("-f", selector);
+      if (FORMAT_SORT) args.push("-S", FORMAT_SORT);
+    }
+    args.push(...jar.args, url);
+
     // Args as an array + no shell: the URL can never be interpreted as a command.
-    const child = spawn(YTDLP, [
-      "-J",
-      "--no-playlist",
-      "--no-warnings",
-      "--socket-timeout", "15",
-      ...jar.args,
-      url
-    ]);
+    const child = spawn(YTDLP, args);
 
     let out = "";
     let err = "";
@@ -629,7 +700,12 @@ app.get("/api/info", rateLimit, async (req, res) => {
   try {
     let info;
     try {
-      info = await ytdlpJson(url);
+      /* Extract against the default download selector, not bare. The response
+         is identical either way, but the dump then also carries the plan the
+         download route needs -- so the click that follows this call costs no
+         extraction at all. */
+      info = await ytdlpJson(url, 25_000, FORMATS.hd);
+      rememberPlan(url, FORMATS.hd, info);
     } catch (err) {
       // yt-dlp parsed the post and found only images. That isn't a failure --
       // it's the one case where the photo route can take over. Any other error
@@ -807,7 +883,10 @@ async function streamMerged(req, res, url, format, platform) {
     console.log(`[${platform}] serving ${path.basename(file)} (${codec || "codec unknown"})`);
 
     const size = fs.statSync(file).size;
-    const filename = safeFilename(res.locals.title || "video", path.extname(files[0]).slice(1) || "mp4");
+    // extname of the file actually chosen, not files[0] -- they are the same
+    // in the normal case and the point of choosing by size is the case where
+    // they aren't.
+    const filename = safeFilename(res.locals.title || "video", path.extname(file).slice(1) || "mp4");
 
     res.setHeader("Content-Type", "video/mp4");
     res.setHeader("Content-Length", String(size));
@@ -822,6 +901,82 @@ async function streamMerged(req, res, url, format, platform) {
     // Delete once the bytes are out, whether that's success or a hang-up.
     stream.on("close", cleanup);
     stream.pipe(res);
+  });
+}
+
+/**
+ * Pipe a single already-muxed stream straight to the browser.
+ *
+ * The fast path, and the common one off YouTube: TikTok, Instagram and
+ * Facebook publish one progressive MP4 that already carries audio, so there is
+ * nothing to merge and nothing for ffmpeg to do. Staging that to disk only to
+ * read it back means the visitor stares at a dead page for the entire download
+ * before the browser even starts saving -- measured at 10s for a 615KB file,
+ * where 6.5s of it was overhead and the rest was waiting for a file that was
+ * already complete.
+ *
+ * Here the headers go out first and bytes flow as they arrive, so the save
+ * dialog appears almost immediately and the transfer is the only cost.
+ *
+ * Only called when the plan says one stream, mp4, with a video track -- see
+ * the routing note in /api/download. Anything else still takes the merge path,
+ * because that is what can guarantee a seekable, remuxed MP4.
+ */
+function streamProgressive(req, res, url, plan, title, platform) {
+  const filename = safeFilename(title, "mp4");
+
+  res.setHeader("Content-Type", "video/mp4");
+  // Only when yt-dlp reported an exact size. filesize_approx is an estimate,
+  // and a Content-Length that disagrees with the body truncates the download.
+  if (plan.size) res.setHeader("Content-Length", String(plan.size));
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${filename.replace(/[^\x20-\x7E]/g, "_")}"; ` +
+    `filename*=UTF-8''${encodeURIComponent(filename)}`
+  );
+
+  const jar = cookieSession();
+
+  /* The exact format id from the plan, not the selector. The selector was
+     already resolved once; re-resolving it risks landing on a different format
+     than the one whose size and codec were just vetted. */
+  const args = [
+    "-f", plan.formatId,
+    "--no-playlist",
+    "--no-warnings",
+    "--concurrent-fragments", "8",
+    "--socket-timeout", "15",
+    ...jar.args,
+    "-o", "-",
+    url
+  ];
+
+  const dl = spawn(YTDLP, args);
+  let failed = "";
+  dl.stderr.on("data", (d) => { failed += d; });
+
+  const cleanup = () => {
+    jar.done();
+    if (!dl.killed) dl.kill("SIGKILL");
+  };
+  res.on("close", cleanup);
+
+  dl.stdout.pipe(res);
+
+  dl.on("error", () => {
+    cleanup();
+    if (!res.headersSent) res.status(500).json({ error: "yt-dlp is not installed on the server." });
+  });
+
+  dl.on("close", (code) => {
+    jar.done();
+    if (code === 0) return;
+    console.error(`[${platform}] yt-dlp exit ${code}: ${failed.trim().split("\n").slice(-3).join(" | ")}`);
+    // Headers left the building with the first byte, so a clean JSON error is
+    // only possible if nothing has been sent. Otherwise cut the stream and let
+    // the browser show it as a failed download.
+    if (!res.headersSent) res.status(502).json({ error: friendlyError(failed) });
+    else res.destroy();
   });
 }
 
@@ -932,23 +1087,54 @@ app.get("/api/download", rateLimit, async (req, res) => {
     return res.status(400).json({ error: "Unknown format. Use hd, sd, mp3 or photo." });
   }
 
-  // Fetch the title first so the saved file isn't called "download".
-  let title = "video";
-  try {
-    const info = await ytdlpJson(url, 20_000);
-    title = info.title || title;
-    res.locals.title = title;
-  } catch {
-    // Non-fatal: a generic filename beats failing the whole download.
+  /* One extraction, and usually zero: /api/info ran this exact query moments
+     ago and left the answer in the cache, so the click that lands here
+     normally pays nothing for it. A miss costs what every download used to. */
+  const selector = FORMATS[format];
+  let info = cachedPlan(url, selector);
+  if (!info) {
+    try {
+      info = await ytdlpJson(url, 20_000, selector);
+      rememberPlan(url, selector, info);
+    } catch {
+      // Non-fatal: a generic filename and the safe route beat failing outright.
+    }
   }
 
-  /* Every video takes the merge-to-disk route, on every platform: the format
-     chain asks for video + audio as two streams, and two streams have to be
-     muxed to a seekable file before an MP4 exists to send. It has to run
-     before any header is set -- streamMerged sets its own, including a real
-     Content-Length, which it can only know once the merge is done. */
+  const title = info?.title || "video";
+  res.locals.title = title;
+
   if (format !== "mp3") {
-    return streamMerged(req, res, url, FORMATS[format], platform);
+    const plan = downloadPlan(info);
+
+    /* Merge only when there is something to merge.
+
+       Three conditions have to hold to take the fast path, and each one is a
+       promise this site makes:
+         - one stream, not two   -> nothing for ffmpeg to mux
+         - already .mp4          -> nothing to remux, so the extension is honest
+         - a real video track    -> not audio being passed off as video
+
+       Anything else -- including "the plan is unknown because the extraction
+       failed" -- falls through to the merge route, which stages to disk and
+       can guarantee all three. That is the old behaviour, so a miss here is
+       slower, never wrong. */
+    const canStream =
+      plan &&
+      !plan.needsMerge &&
+      plan.ext === "mp4" &&
+      plan.vcodec && plan.vcodec !== "none";
+
+    if (canStream) {
+      console.log(`[${platform}] streaming ${plan.formatId} (${plan.vcodec}) — no merge needed`);
+      return streamProgressive(req, res, url, plan, title, platform);
+    }
+
+    console.log(
+      `[${platform}] merging ${plan ? plan.formatId : "?"} — ` +
+      (plan ? `${plan.needsMerge ? "two streams" : `ext=${plan.ext}`}` : "no plan")
+    );
+    return streamMerged(req, res, url, selector, platform);
   }
 
   const filename = safeFilename(title, "mp3");

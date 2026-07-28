@@ -167,6 +167,51 @@ also means the read-only Render mount is never written to.
 | `FFPROBE_PATH` | `server/bin/ffprobe`, else PATH | Used to confirm the finished file actually has a video track. If it can't run, the check is skipped rather than failing the download. |
 | `MAX_QUALITY` | *(off)* | Set to `1` to drop the H.264 preference — highest resolution wins, codec be damned. **This is the setting that produces AV1.** Leave it off unless you know every player you care about handles AV1/VP9; see below. |
 
+### How a download spends its time
+
+Two costs dominate, and neither is bandwidth: a yt-dlp *extraction* is a real
+round-trip to the platform (measured 3.4–3.9s against YouTube), and the yt-dlp
+binary itself takes ~1.5s to start because the standalone build unpacks on
+every run.
+
+The route is built to pay each of those as few times as possible:
+
+- **The extraction is cached** for 5 minutes, keyed by URL + selector. The
+  frontend always calls `/api/info` before showing the button, and that call
+  now runs with `-f`/`-S` applied, so its dump already contains the exact
+  download plan. The click that follows costs no extraction of its own.
+- **A single already-muxed stream is piped straight to the browser.** No temp
+  file, no ffmpeg, no ffprobe — headers go out first and bytes flow as they
+  arrive. This is the normal case for TikTok, Instagram and Facebook, which
+  publish one progressive MP4.
+- **Merging only happens when there are two streams to merge.** That path
+  still stages to disk, because MP4 has to seek back and write its header once
+  the length is known and a pipe cannot seek — piping a merge produces MPEG-TS
+  wearing an `.mp4` name, which phones refuse to save.
+
+Measured on a 615 KB progressive file, laptop to YouTube:
+
+| | before | after |
+|---|---|---|
+| download after `/api/info` (the real flow) | 10.0s to first byte | **3.3s** |
+| cold download, nothing cached | ~10s | 6.7s |
+| total wall clock | 10.0s | 3.8s |
+
+Before, `ttfb` equalled `total` — the browser got nothing until the entire file
+had been downloaded and re-read from disk. Now the two diverge, which is the
+whole point.
+
+Two further optimisations were measured and **rejected**:
+
+- `--load-info-json` would skip the download run's own extraction, worth ~1.7s
+  (2.24s vs 3.9s). It means downloading from signed CDN URLs cached for up to
+  five minutes; if they go stale the request fails after headers are already
+  out. Not worth it on three platforms that can't be regression-tested here.
+- Replacing the standalone yt-dlp binary with a pip install in a venv would cut
+  the ~1.5s startup, since the onefile build unpacks itself on every spawn.
+  That is a real win and a deployment change, so it is left as a follow-up
+  rather than folded into a latency fix.
+
 ### If a download plays sound but shows no picture
 
 The file almost certainly *has* a video track — it's just in a codec the player
