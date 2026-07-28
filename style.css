@@ -1,5 +1,5 @@
 /* ==========================================================================
-   VIDEO-HUB — style.css
+   VID VORTEX — style.css
    Premium video downloader UI. Vanilla CSS3, no frameworks.
 
    Contents
@@ -16,44 +16,64 @@
    01. TOKENS & RESET
    ========================================================================== */
 
+/* Red-and-white theme: white ground, one red accent, dark ink. No second hue.
+   The three brand slots that held blue/green/yellow hold three steps of the
+   same red, so the per-platform accents further down still read as distinct
+   without reintroducing a competing colour.
+
+   Inverting a dark theme is not a matter of swapping two values: every panel
+   fill, hairline and shadow was a white alpha over black, and white alphas
+   vanish on white. Those are now black alphas — at LOWER numbers, because
+   dark-on-light reads much stronger than light-on-dark at equal alpha.
+
+   Whites that sit on RED (button labels, the spinner, ::selection) or on the
+   preview thumbnail (which stays dark — it stands in for video) are
+   deliberately left alone. */
 :root {
-  /* Brand — the only three colors */
-  --blue: #2563eb;
-  --green: #10b981;
-  --yellow: #facc15;
+  /* Brand — one hue, three steps */
+  --red: #e50914;       /* primary — buttons, active states */
+  --red-deep: #b20710;  /* pressed / hover-dark, and ink-weight red */
+  --red-glow: #f6121d;  /* lifted */
 
-  /* Tints derived from the brand trio */
-  --blue-soft: rgba(37, 99, 235, 0.16);
-  --green-soft: rgba(16, 185, 129, 0.16);
-  --yellow-soft: rgba(250, 204, 21, 0.16);
+  /* Tints. Low alphas: on white these are washes, and red goes pink fast. */
+  --red-soft: rgba(229, 9, 20, 0.1);
+  --red-deep-soft: rgba(178, 7, 16, 0.1);
+  --red-glow-soft: rgba(246, 18, 29, 0.1);
 
-  /* A lighter tint of --blue. #2563EB is too dark to read as a lit edge or a
-     small label against the dark ground; this is the same hue, lifted. */
-  --blue-lite: #60a5fa;
+  /* Was a LIFTED red (#FF5F68) for reading against black. On white the
+     relationship inverts: the deep red is the readable one, and this token now
+     holds it so every consumer inherits the fix. */
+  --red-lite: #b20710;
 
-  /* Surface */
-  --bg: #060b18;
-  --bg-2: #0a1122;
-  --ink: #eef2ff;
-  --ink-dim: #a9b4d0;
-  --ink-faint: #6b7899;
+  /* Surface — white ground, near-white for recessed panels. */
+  --bg: #ffffff;
+  --bg-2: #f7f7f7;
+  --ink: #141414;
+  --ink-dim: #5a5a5a;
+  --ink-faint: #8a8a8a;
 
-  /* Glass */
-  --glass-bg: rgba(255, 255, 255, 0.055);
-  --glass-brd: rgba(255, 255, 255, 0.12);
-  --glass-hi: rgba(255, 255, 255, 0.22);
-  --blur: 18px;
+  /* Panels: black alphas now, and small ones. --blur stays low — this look is
+     flat matte surfaces separated by hairlines and soft shadow, not frost. */
+  --glass-bg: rgba(0, 0, 0, 0.025);
+  --glass-brd: rgba(0, 0, 0, 0.1);
+  --glass-hi: rgba(0, 0, 0, 0.18);
+  --blur: 8px;
 
-  /* Shadows */
-  --sh-sm: 0 4px 14px rgba(2, 6, 20, 0.35);
-  --sh-md: 0 14px 40px rgba(2, 6, 20, 0.45);
-  --sh-lg: 0 30px 80px rgba(2, 6, 20, 0.6);
-  --sh-glow-blue: 0 0 42px rgba(37, 99, 235, 0.45);
-  --sh-glow-green: 0 0 42px rgba(16, 185, 129, 0.4);
-  --sh-glow-yellow: 0 0 42px rgba(250, 204, 21, 0.35);
+  /* Shadows — far lighter than the dark theme's. A 0.85-alpha drop shadow on
+     white is a smudge; on white, shadow does the separating that contrast used
+     to do, so it wants to be soft and wide, not heavy. */
+  --sh-sm: 0 2px 8px rgba(0, 0, 0, 0.07);
+  --sh-md: 0 10px 30px rgba(0, 0, 0, 0.1);
+  --sh-lg: 0 24px 60px rgba(0, 0, 0, 0.14);
+  --sh-glow-red: 0 0 32px rgba(229, 9, 20, 0.28);
+  --sh-glow-red-deep: 0 0 32px rgba(178, 7, 16, 0.25);
+  --sh-glow-red-glow: 0 0 32px rgba(246, 18, 29, 0.25);
 
-  /* Neumorphic pair (used on chips / small controls) */
-  --neu: 6px 6px 16px rgba(0, 0, 0, 0.45), -6px -6px 16px rgba(255, 255, 255, 0.04);
+  /* Was a neumorphic pair — an offset dark shadow plus a white highlight. That
+     look needs a mid-grey ground to push against; on white the highlight is
+     invisible and the offset shadow just smears the red bloom behind it into a
+     dirty pink halo. One soft, centred shadow instead. */
+  --neu: 0 2px 10px rgba(0, 0, 0, 0.06);
 
   /* Motion */
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
@@ -62,10 +82,18 @@
   --t: 0.4s;
   --t-slow: 0.75s;
 
-  /* Layout */
+  /* Layout.
+
+     A four-step radius scale. The stylesheet previously held ELEVEN different
+     hardcoded radii (2/8/9/10/12/14/16/18/20/22/99px) with nothing relating
+     them — a 6px field beside an 18px card beside a 20px icon. That mismatch,
+     more than any single value, is what made the page read as unresolved.
+     Each step is roughly 1.6x the last, so they look related at a glance. */
   --maxw: 1200px;
-  --radius: 22px;
-  --radius-sm: 14px;
+  --radius-sm: 6px;    /* small glyph plates: icons, tags */
+  --radius: 10px;      /* controls: fields, buttons, list cells */
+  --radius-lg: 16px;   /* surfaces: cards, panels, big icon tiles */
+  --radius-pill: 999px;/* chips, badges, eyebrows */
   --nav-h: 74px;
 }
 
@@ -83,7 +111,10 @@ body {
   min-height: 100vh;
   background: var(--bg);
   color: var(--ink);
-  font-family: "Poppins", system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Inter over the old Poppins: this look wants a tight, neutral grotesque.
+     Poppins is geometric and round, which fights it. Falls back to the same
+     Helvetica-ish stack the big streaming sites use. */
+  font-family: "Inter", "Helvetica Neue", Helvetica, system-ui, -apple-system, "Segoe UI", sans-serif;
   font-weight: 400;
   line-height: 1.65;
   overflow-x: hidden;
@@ -100,23 +131,41 @@ button { background: none; border: 0; cursor: pointer; }
 a { color: inherit; text-decoration: none; }
 ul { list-style: none; }
 
-::selection { background: var(--blue); color: #fff; }
+::selection { background: var(--red); color: #fff; }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 11px; }
-::-webkit-scrollbar-track { background: #05091352; }
+::-webkit-scrollbar-track { background: #f0f0f0; }
 ::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, var(--blue), var(--green));
-  border-radius: 99px;
+  background: linear-gradient(180deg, var(--red), var(--red-deep));
+  border-radius: var(--radius-pill);
   border: 3px solid var(--bg);
 }
-::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, var(--green), var(--yellow)); }
-html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
+::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, var(--red-deep), var(--red-glow)); }
+html { scrollbar-color: var(--red) #f0f0f0; scrollbar-width: thin; }
 
 :focus-visible {
-  outline: 2px solid var(--yellow);
+  outline: 2px solid var(--red-glow);
   outline-offset: 3px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
+}
+
+/* Visible to screen readers, invisible on screen. Used by the icon-only chips.
+
+   Not `display: none` or `visibility: hidden` — both remove the text from the
+   accessibility tree, which is the one thing this must not do. The 1px clip is
+   the standard way to keep it readable while taking no space. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ---- Layout helpers ---- */
@@ -143,7 +192,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   padding: 0.35rem 0.95rem;
   margin-bottom: 1rem;
   border: 1px solid var(--glass-brd);
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   background: var(--glass-bg);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -169,7 +218,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 }
 
 .gradient-text {
-  background: linear-gradient(100deg, var(--blue) 0%, var(--green) 45%, var(--yellow) 100%);
+  background: linear-gradient(100deg, var(--red) 0%, var(--red-deep) 45%, var(--red-glow) 100%);
   background-size: 220% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -182,24 +231,43 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   50% { background-position: 100% 50%; }
 }
 
+/* ---- Wordmark lockup ----
+   Italic + tight tracking, matching the brand artwork. The reference splits
+   the name across two colours and lands the final letter back on the accent;
+   on a white page the white half becomes ink, or it disappears. */
+.wm-vid    { color: var(--red); }
+.wm-vortex { color: var(--ink); }
+.wm-x      { color: var(--red); }
+
+.hero-wordmark {
+  font-style: italic;
+  letter-spacing: -0.045em;
+}
+
+/* Tagline. The <i> elements are the separators — red, and the only thing
+   carrying the accent down here. */
+.hero-tagline {
+  margin-top: 0.5rem;
+  text-align: center;
+  text-transform: uppercase;
+  font-size: clamp(0.62rem, 1.5vw, 0.76rem);
+  font-weight: 700;
+  font-style: italic;
+  letter-spacing: 0.34em;
+  /* letter-spacing adds a trailing gap after the last glyph, which throws a
+     centred line off-centre by half of it. Pull it back. */
+  text-indent: 0.34em;
+  color: var(--ink-dim);
+}
+.hero-tagline i { color: var(--red); font-style: inherit; }
+
+/* The travelling-glint treatment that used to live here is gone. It worked by
+   clipping a gradient to the text with color:transparent — which the two-tone
+   spans above cannot coexist with, because their own opaque `color` paints
+   straight over the clipped gradient. The brand lockup is two-tone and static;
+   the motion in the hero is the vortex mark. */
+
 /* Shimmer sweep across the logo text */
-.shimmer { position: relative; }
-.shimmer::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, 0.75) 50%, transparent 62%);
-  background-size: 250% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: shimmerSweep 4.5s ease-in-out infinite;
-  pointer-events: none;
-}
-@keyframes shimmerSweep {
-  0% { background-position: 180% 0; }
-  55%, 100% { background-position: -80% 0; }
-}
 
 /* Shared glassmorphism surface */
 .glass {
@@ -219,10 +287,13 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   position: fixed;
   inset: 0;
   z-index: -4;
+  /* Fainter again for the white ground. Red over black darkens toward maroon
+     and hides; red over white lightens toward pink and shows. Same alphas that
+     were a whisper on black are a blush on white, so they come down further. */
   background:
-    radial-gradient(120% 90% at 15% 0%, rgba(37, 99, 235, 0.28), transparent 55%),
-    radial-gradient(100% 80% at 85% 15%, rgba(16, 185, 129, 0.2), transparent 55%),
-    radial-gradient(90% 70% at 50% 100%, rgba(250, 204, 21, 0.12), transparent 60%),
+    radial-gradient(120% 90% at 15% 0%, rgba(229, 9, 20, 0.05), transparent 55%),
+    radial-gradient(100% 80% at 85% 15%, rgba(178, 7, 16, 0.035), transparent 55%),
+    radial-gradient(90% 70% at 50% 100%, rgba(246, 18, 29, 0.025), transparent 60%),
     linear-gradient(165deg, var(--bg) 0%, var(--bg-2) 50%, var(--bg) 100%);
   background-size: 180% 180%, 180% 180%, 180% 180%, 100% 100%;
   animation: bgDrift 24s ease-in-out infinite;
@@ -240,26 +311,28 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   position: absolute;
   border-radius: 45% 55% 52% 48% / 50% 45% 55% 50%;
   filter: blur(70px);
-  opacity: 0.5;
+  /* Lower again for the white ground: a red haze that hid against black reads
+     as pink smoke against white. */
+  opacity: 0.1;
   will-change: transform, border-radius;
 }
 .blob-1 {
   width: 46vmax; height: 46vmax;
   top: -14vmax; left: -12vmax;
-  background: radial-gradient(circle at 35% 35%, var(--blue), transparent 68%);
+  background: radial-gradient(circle at 35% 35%, var(--red), transparent 68%);
   animation: blobMorph 18s ease-in-out infinite, blobFloat 26s ease-in-out infinite;
 }
 .blob-2 {
   width: 38vmax; height: 38vmax;
   top: 35%; right: -14vmax;
-  background: radial-gradient(circle at 60% 40%, var(--green), transparent 68%);
+  background: radial-gradient(circle at 60% 40%, var(--red-deep), transparent 68%);
   animation: blobMorph 22s ease-in-out infinite reverse, blobFloat 30s ease-in-out infinite reverse;
 }
 .blob-3 {
   width: 30vmax; height: 30vmax;
   bottom: -10vmax; left: 30%;
-  background: radial-gradient(circle at 50% 50%, var(--yellow), transparent 66%);
-  opacity: 0.3;
+  background: radial-gradient(circle at 50% 50%, var(--red-glow), transparent 66%);
+  opacity: 0.14;
   animation: blobMorph 20s ease-in-out 2s infinite, blobFloat 34s ease-in-out infinite;
 }
 
@@ -289,7 +362,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   height: 520px;
   border-radius: 50%;
   left: 0; top: 0;
-  background: radial-gradient(circle, rgba(37, 99, 235, 0.14) 0%, rgba(16, 185, 129, 0.06) 45%, transparent 70%);
+  background: radial-gradient(circle, rgba(229, 9, 20, 0.06) 0%, rgba(178, 7, 16, 0.025) 45%, transparent 70%);
   transform: translate3d(-50%, -50%, 0);
   pointer-events: none;
   opacity: 0;
@@ -316,21 +389,21 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 }
 .cursor-dot {
   width: 7px; height: 7px;
-  background: var(--yellow);
-  box-shadow: 0 0 12px var(--yellow);
+  background: var(--red-glow);
+  box-shadow: 0 0 12px var(--red-glow);
 }
 .cursor-ring {
   width: 34px; height: 34px;
-  border: 1.6px solid rgba(37, 99, 235, 0.85);
-  box-shadow: 0 0 18px rgba(37, 99, 235, 0.35), inset 0 0 12px rgba(16, 185, 129, 0.2);
+  border: 1.6px solid rgba(229, 9, 20, 0.85);
+  box-shadow: 0 0 18px rgba(229, 9, 20, 0.35), inset 0 0 12px rgba(178, 7, 16, 0.2);
 }
 .cursor-dot.on, .cursor-ring.on { opacity: 1; }
 .cursor-ring.hot {
   width: 56px; height: 56px;
-  border-color: var(--green);
-  background: rgba(16, 185, 129, 0.1);
+  border-color: var(--red-deep);
+  background: rgba(178, 7, 16, 0.1);
 }
-.cursor-dot.hot { background: var(--green); box-shadow: 0 0 14px var(--green); }
+.cursor-dot.hot { background: var(--red-deep); box-shadow: 0 0 14px var(--red-deep); }
 
 /* Loader */
 .page-loader {
@@ -349,10 +422,10 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .loader-ring {
   width: 62px; height: 62px;
   border-radius: 50%;
-  border: 3px solid rgba(255, 255, 255, 0.08);
-  border-top-color: var(--blue);
-  border-right-color: var(--green);
-  border-bottom-color: var(--yellow);
+  border: 3px solid rgba(0, 0, 0, 0.08);
+  border-top-color: var(--red);
+  border-right-color: var(--red-deep);
+  border-bottom-color: var(--red-glow);
   animation: spin 0.9s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -380,10 +453,10 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
               backdrop-filter var(--t);
 }
 .navbar.scrolled {
-  background: rgba(6, 11, 24, 0.72);
+  background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(16px) saturate(150%);
   -webkit-backdrop-filter: blur(16px) saturate(150%);
-  box-shadow: 0 8px 30px rgba(2, 6, 20, 0.5);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.07);
   border-bottom: 1px solid var(--glass-brd);
 }
 
@@ -412,27 +485,30 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   height: 1.85rem;
   flex-shrink: 0;
   overflow: visible;
-  filter: drop-shadow(0 2px 9px rgba(37, 99, 235, 0.5));
+  filter: drop-shadow(0 2px 9px rgba(229, 9, 20, 0.5));
   transition: filter var(--t) var(--ease);
 }
-.lm-ring,
+.lm-v,
+.lm-d,
 .lm-play {
   /* Without transform-box the origin resolves against the border box, not the
-     viewBox, and the mark rotates around its corner. */
+     viewBox, and a scaled part drifts off the mark's centre. */
   transform-box: view-box;
   transform-origin: 50% 50%;
 }
-.lm-ring { transition: transform 0.8s var(--ease); }
 .lm-play { transition: transform 0.45s var(--ease-bounce); }
+.lm-d { transition: transform 0.5s var(--ease); }
 
-.nav-logo:hover .lm-ring { transform: rotate(180deg); }
-.nav-logo:hover .lm-play { transform: scale(1.22); }
-.nav-logo:hover .logo-mark { filter: drop-shadow(0 3px 16px rgba(16, 185, 129, 0.75)); }
+/* Hover nudges the play glyph and eases the D outward — the monogram is a
+   solid mark now, so it flexes rather than spins. */
+.nav-logo:hover .lm-play { transform: scale(1.18); }
+.nav-logo:hover .lm-d { transform: scale(1.04); }
+.nav-logo:hover .logo-mark { filter: drop-shadow(0 3px 16px rgba(178, 7, 16, 0.75)); }
 
 .nav-logo-text {
   font-size: 1.24rem;
   letter-spacing: -0.03em;
-  background: linear-gradient(95deg, var(--blue), var(--green), var(--yellow));
+  background: linear-gradient(95deg, var(--red), var(--red-deep), var(--red-glow));
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -446,7 +522,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   position: relative;
   display: inline-block;
   padding: 0.5rem 0.9rem;
-  border-radius: 10px;
+  border-radius: var(--radius);
   color: var(--ink-dim);
   font-size: 0.9rem;
   font-weight: 500;
@@ -459,7 +535,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   bottom: 0.28rem;
   height: 2px;
   border-radius: 2px;
-  background: linear-gradient(90deg, var(--blue), var(--green), var(--yellow));
+  background: linear-gradient(90deg, var(--red), var(--red-deep), var(--red-glow));
   transform: scaleX(0);
   transform-origin: right;
   transition: transform var(--t) var(--ease);
@@ -470,21 +546,13 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .nav-link.active { color: var(--ink); }
 
 /* Scroll progress bar under the nav */
-.nav-progress {
-  height: 2px;
-  width: 0%;
-  background: linear-gradient(90deg, var(--blue), var(--green), var(--yellow));
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.6);
-  transition: width 0.1s linear;
-}
-
 /* Burger */
 .nav-toggle {
   display: none;
   flex-direction: column;
   gap: 5px;
   padding: 10px;
-  border-radius: 10px;
+  border-radius: var(--radius);
   border: 1px solid var(--glass-brd);
   background: var(--glass-bg);
 }
@@ -518,7 +586,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   padding: 0.42rem 1.05rem;
   margin-bottom: 1.5rem;
   border: 1px solid var(--glass-brd);
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   background: var(--glass-bg);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -530,13 +598,13 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .pulse-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  background: var(--red-deep);
+  box-shadow: 0 0 0 0 rgba(178, 7, 16, 0.7);
   animation: pulseRing 2s infinite;
 }
 @keyframes pulseRing {
-  70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+  70% { box-shadow: 0 0 0 10px rgba(178, 7, 16, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(178, 7, 16, 0); }
 }
 
 .hero-title {
@@ -545,9 +613,11 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   justify-content: center;
   gap: 0.5rem;
   font-size: clamp(2.6rem, 8.5vw, 5.5rem);
-  font-weight: 800;
+  /* 900, not 800: Inter's heaviest cut is what carries this look. Poppins had
+     no 900, which is part of why the old hero read softer. */
+  font-weight: 900;
   line-height: 1.05;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.04em;
 }
 /* Hero copy of the mark: bigger, and the ring turns slowly on its own. The
    float animates the <svg>; the spin animates the <g> inside it, so the two
@@ -555,17 +625,18 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .hero-logo-mark {
   width: 0.98em;
   height: 0.98em;
-  filter: drop-shadow(0 12px 30px rgba(37, 99, 235, 0.55));
+  filter: drop-shadow(0 12px 30px rgba(229, 9, 20, 0.55));
   animation: heroIconFloat 4.5s ease-in-out infinite;
 }
-.hero-logo-mark .lm-ring { animation: ringSpin 22s linear infinite; }
+/* The mark is a solid monogram now, not a ring of arcs — there's nothing to
+   spin, so the hero copy just breathes on the play glyph while the whole mark
+   floats. The old per-arc vortex rotations went with the arcs. */
 .hero-logo-mark .lm-play { animation: playPulse 4.5s ease-in-out infinite; }
 
 @keyframes heroIconFloat {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-14px); }
 }
-@keyframes ringSpin { to { transform: rotate(360deg); } }
 @keyframes playPulse {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.08); }
@@ -585,8 +656,8 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   height: 1.05em;
   margin-left: 2px;
   vertical-align: -0.16em;
-  background: var(--yellow);
-  box-shadow: 0 0 10px var(--yellow);
+  background: var(--red-glow);
+  box-shadow: 0 0 10px var(--red-glow);
   animation: caretBlink 1s steps(2) infinite;
 }
 @keyframes caretBlink { 50% { opacity: 0; } }
@@ -611,7 +682,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   place-items: center;
   width: clamp(48px, 6vw, 74px);
   aspect-ratio: 1;
-  border-radius: 20px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--glass-brd);
   background: var(--glass-bg);
   backdrop-filter: blur(12px);
@@ -622,11 +693,30 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 }
 .float-icon svg { width: 46%; height: 46%; }
 
-.fi-1 { top: 4%;  left: 3%;   color: var(--green);  animation: float3d 9s ease-in-out infinite; }
-.fi-2 { top: 12%; right: 5%;  color: var(--yellow); animation: float3d 11s ease-in-out 0.6s infinite reverse; }
-.fi-3 { top: 46%; left: 1%;   color: var(--blue);   animation: float3d 10s ease-in-out 1.2s infinite; }
-.fi-4 { top: 40%; right: 2%;  color: var(--green);  animation: float3d 12s ease-in-out 0.3s infinite reverse; }
-.fi-5 { bottom: 6%; left: 8%; color: var(--yellow); animation: float3d 10.5s ease-in-out 1.8s infinite; }
+/* fi-1/2/3 are brand logos — their fills are baked into the SVGs, so no
+   `color` here: it would be ignored. fi-4 (download arrow) and fi-5 (phone)
+   are UI glyphs rather than marks and stay on the red accent. */
+/* Positions alternate down each edge so neither side ends up top-heavy, and
+   every tile gets its own duration + delay: shared timings would make them
+   drift in lockstep, which reads as a carousel rather than as drifting.
+   Durations are deliberately non-multiples of each other so the whole set
+   takes a very long time to line up again.
+
+           LEFT                      RIGHT
+     4%    fi-1  TikTok        12%   fi-2  Instagram
+    24%    fi-7  link          28%   fi-8  check
+    46%    fi-3  Facebook      40%   fi-4  download
+    70%    fi-9  bolt          66%   fi-6  YouTube
+    94%    fi-5  phone                                   */
+.fi-1 { top: 4%;  left: 3%;   animation: float3d 9s ease-in-out infinite; }
+.fi-2 { top: 12%; right: 5%;  animation: float3d 11s ease-in-out 0.6s infinite reverse; }
+.fi-3 { top: 46%; left: 1%;   animation: float3d 10s ease-in-out 1.2s infinite; }
+.fi-4 { top: 40%; right: 2%;  color: var(--red-deep);  animation: float3d 12s ease-in-out 0.3s infinite reverse; }
+.fi-5 { bottom: 6%; left: 8%; color: var(--red-glow); animation: float3d 10.5s ease-in-out 1.8s infinite; }
+.fi-6 { top: 66%; right: 6%;  animation: float3d 13s ease-in-out 0.9s infinite; }
+.fi-7 { top: 24%; left: 7%;   color: var(--red);      animation: float3d 11.5s ease-in-out 2.4s infinite reverse; }
+.fi-8 { top: 28%; right: 10%; color: var(--red-deep); animation: float3d 9.5s ease-in-out 1.5s infinite; }
+.fi-9 { top: 70%; left: 4%;   color: var(--red-glow); animation: float3d 12.5s ease-in-out 0.4s infinite reverse; }
 
 @keyframes float3d {
   0%, 100% { transform: translate3d(0, 0, 0) rotateX(0) rotateY(0) rotateZ(0); }
@@ -643,22 +733,30 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   gap: 0.7rem;
   margin-top: 1.6rem;
 }
+/* Icon only — the label lives in an .sr-only span. A fixed 46px square with a
+   50% radius rather than a text pill: with nothing to hug, padding alone would
+   leave three different-width blobs (the old labels weren't equal length).
+   46px also clears the 44px minimum touch target. */
 .chip {
-  padding: 0.4rem 1.1rem;
-  border-radius: 99px;
+  display: inline-grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border-radius: 50%;
   border: 1px solid var(--glass-brd);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(0, 0, 0, 0.03);
   box-shadow: var(--neu);
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--ink-dim);
-  transition: transform var(--t) var(--ease-bounce), color var(--t-fast),
+  transition: transform var(--t) var(--ease-bounce),
               border-color var(--t-fast), box-shadow var(--t);
 }
-.chip:hover { transform: translateY(-4px) scale(1.06); color: var(--ink); }
-.chip-tiktok:hover    { border-color: var(--green);  box-shadow: var(--sh-glow-green); }
-.chip-instagram:hover { border-color: var(--yellow); box-shadow: var(--sh-glow-yellow); }
-.chip-facebook:hover  { border-color: var(--blue);   box-shadow: var(--sh-glow-blue); }
+/* Bigger than the 16px it was beside a label — the glyph is the whole chip now. */
+.chip-icon { width: 22px; height: 22px; }
+.chip:hover { transform: translateY(-4px) scale(1.06); }
+.chip-tiktok:hover    { border-color: var(--red-deep);  box-shadow: var(--sh-glow-red-deep); }
+.chip-instagram:hover { border-color: var(--red-glow); box-shadow: var(--sh-glow-red-glow); }
+.chip-facebook:hover  { border-color: var(--red);   box-shadow: var(--sh-glow-red); }
+.chip-youtube:hover   { border-color: var(--red-deep); box-shadow: var(--sh-glow-red-deep); }
 
 /* ---- Scroll cue ---- */
 .scroll-cue {
@@ -675,7 +773,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   display: block;
   width: 24px; height: 38px;
   border: 2px solid var(--ink-dim);
-  border-radius: 14px;
+  border-radius: var(--radius);
   position: relative;
 }
 .wheel {
@@ -684,7 +782,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   width: 3px; height: 7px;
   margin-left: -1.5px;
   border-radius: 2px;
-  background: var(--green);
+  background: var(--red-deep);
   animation: wheelDrop 1.8s var(--ease) infinite;
 }
 @keyframes wheelDrop {
@@ -701,25 +799,46 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
    06. PASTE CARD
    ========================================================================== */
 
+/* Static by design. The spinning conic ring, the 3D tilt and the scroll
+   entrance are all gone: this card is the page's primary control, and a
+   target that drifts, rotates and glows is harder to aim at than one that
+   sits still. Depth now comes from a flat surface, a hairline and a shadow.
+
+   `transform-style: preserve-3d` went with the tilt -- nothing here has a
+   Z axis any more. */
 .paste-card {
   position: relative;
   max-width: 760px;
   margin: clamp(2rem, 4vw, 3rem) auto 0;
-  padding: clamp(1.5rem, 3.5vw, 2.4rem);
-  transform-style: preserve-3d;
+  /* No padding: it lives on .paste-body so .paste-head can reach the edges.
+     overflow: hidden clips the band's top corners to the card's radius —
+     giving the band its own radius would leave a hairline of card border
+     showing through at each corner. It doesn't create a stacking context, so
+     the .input-wrap::before halo still paints exactly as before. */
+  padding: 0;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 0, 0, 0.09);
+  box-shadow: var(--sh-lg);
 }
 
-/* Animated conic glow that hugs the card */
-.paste-glow {
-  position: absolute;
-  inset: -2px;
-  z-index: -1;
-  border-radius: inherit;
-  background: conic-gradient(from 0deg, var(--blue), var(--green), var(--yellow), var(--blue));
-  filter: blur(16px);
-  opacity: 0.35;
-  animation: spin 9s linear infinite;
+/* The red band. Same clamp() as .paste-body's horizontal padding so the label
+   lines up with the field below it. */
+.paste-head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.8rem clamp(1.5rem, 3.5vw, 2.4rem);
+  background: var(--red);
+  color: #fff;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
+.paste-head-icon { width: 15px; height: 15px; flex-shrink: 0; }
+
+.paste-body { padding: clamp(1.5rem, 3.5vw, 2.4rem); }
 
 .paste-form {
   display: flex;
@@ -738,61 +857,65 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
    form a stacking context, or ::before{z-index:-1} would paint above this
    background instead of behind it, and we'd be right back to the wash.
    -------------------------------------------------------------------------- */
+/* Light field on the dark card — the one bright surface on the page, which is
+   the point: it's where you're meant to look and type.
+
+   Everything inside it had to invert with it. White-on-white text, a white
+   TikTok glyph and a white invalid edge would all have vanished; see the rules
+   below and .input-platform. */
 .input-wrap {
   position: relative;
   flex: 1;
   min-width: 0;
-  border-radius: 16px;
-  background: #070d1c;
-  border: 1.5px solid var(--glass-brd);
-  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease),
-              transform var(--t) var(--ease);
+  border-radius: var(--radius);
+  background: #f5f5f5;
+  border: 1.5px solid rgba(0, 0, 0, 0.12);
+  /* Colour and shadow only. The field no longer lifts on focus: moving the
+     target under the cursor is exactly what a text field shouldn't do. */
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
 
-/* Soft halo behind the field. Only the blurred spill past the edges shows. */
+/* Soft halo behind the field. Only the blurred spill past the edges shows.
+   Now a still gradient -- the gradShift loop that used to slide it back and
+   forth ran forever, even when the field was untouched. */
 .input-wrap::before {
   content: "";
   position: absolute;
   inset: -1.5px;
   z-index: -1;
   border-radius: inherit;
-  background: linear-gradient(100deg, var(--blue), var(--blue-lite), var(--green));
-  background-size: 200% 100%;
+  background: linear-gradient(100deg, var(--red-deep), var(--red), var(--red-deep));
   opacity: 0;
   filter: blur(12px);
-  transition: opacity var(--t);
-  animation: gradShift 5s var(--ease) infinite;
+  transition: opacity var(--t-fast);
 }
 
-/* Focus reads through a steady lit border + halo. No travelling arc: the state
-   change is instant, only the fade in/out is eased. */
+/* Focus: a lit hairline plus the halo fading up. Instant state change, eased
+   fade — nothing travels. */
 .input-wrap.focused {
-  border-color: var(--blue-lite);
-  transform: translateY(-2px);
-  box-shadow: 0 0 0 1.5px rgba(37, 99, 235, 0.5), 0 12px 40px rgba(37, 99, 235, 0.28);
+  border-color: var(--red);
+  box-shadow: 0 0 0 1px rgba(229, 9, 20, 0.55);
 }
-.input-wrap.focused::before { opacity: 0.9; }
+.input-wrap.focused::before { opacity: 0.55; }
 
-/* Green is the "we recognise this platform" signal, so it overrides focus blue. */
+/* "We recognise this platform" — the brightest step, so it reads over focus. */
 .input-wrap.valid {
-  border-color: var(--green);
-  box-shadow: 0 0 0 1.5px var(--green), 0 12px 40px rgba(16, 185, 129, 0.28);
+  border-color: var(--red-glow);
+  box-shadow: 0 0 0 1px rgba(246, 18, 29, 0.6);
 }
-.input-wrap.valid::before {
-  background: linear-gradient(100deg, var(--green), var(--blue-lite), var(--green));
-}
+.input-wrap.valid::before { opacity: 0.7; }
+
+/* Invalid is a held amber edge, not a shake. Amber for two reasons: red
+   already means "brand" here so it can't also mean "wrong", and this is the
+   same amber as .toast-warn — the field and the toast that explains it now
+   agree. (It was white until the field went light, at which point a white
+   edge on a white field was invisible; black would have vanished into the
+   dark card instead. Amber reads against both.) */
 .input-wrap.invalid {
-  border-color: var(--yellow);
-  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.6);
-  animation: shake 0.45s var(--ease);
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.55);
 }
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  20% { transform: translateX(-9px); }
-  40% { transform: translateX(8px); }
-  60% { transform: translateX(-5px); }
-  80% { transform: translateX(3px); }
-}
+.input-wrap.invalid::before { opacity: 0; }
 
 .url-input {
   width: 100%;
@@ -800,22 +923,26 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   border: 0;
   border-radius: inherit;
   background: transparent;
-  color: var(--ink);
+  /* Dark ink, not var(--ink) — that's #fff, which was invisible the moment
+     the field went light. Same for the caret. */
+  color: #141414;
+  caret-color: var(--red);
   font-size: 1rem;
-  font-weight: 400;
+  font-weight: 500;
   outline: none;
 }
 .url-input::placeholder { color: transparent; }
 
-/* Floating label */
+/* Floating label. Reads on the light field, so it's grey ink rather than
+   var(--ink-faint) — #808080 was tuned against a near-black background. */
 .float-label {
   position: absolute;
   left: 1.2rem;
   top: 50%;
   transform: translateY(-50%);
-  color: var(--ink-faint);
+  color: #6b6b6b;
   font-size: 1rem;
-  font-weight: 300;
+  font-weight: 400;
   pointer-events: none;
   transition: transform var(--t) var(--ease), font-size var(--t) var(--ease),
               color var(--t) var(--ease);
@@ -824,28 +951,42 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .url-input:not(:placeholder-shown) + .float-label {
   transform: translateY(-140%) scale(0.78);
   transform-origin: left center;
-  color: var(--blue-lite);
-  font-weight: 500;
+  color: var(--red);
+  font-weight: 600;
 }
-/* Green is reserved for "we recognise this platform" -- it shouldn't fire on
-   focus alone. Same specificity as the rule above, so order carries it. */
-.input-wrap.valid .float-label { color: var(--green); }
+/* The "we recognise this platform" label. Same specificity as the focus rule
+   above, so source order carries it.
 
-/* Detected-platform badge inside the field */
+   The reds here are the inverse of what they were: --red-lite (#FF5F68) was
+   chosen when this field was near-black, and it washes out on #f5f5f5. The
+   deep reds that were unreadable then are the readable ones now. */
+.input-wrap.valid .float-label { color: var(--red-deep); }
+
+/* Detected-platform badge inside the field. Fades in at full size: it used to
+   spring from 0.6 on an --ease-bounce curve, which put a pop of movement
+   inside the field on every keystroke that completed a URL. */
+/* Instagram's gradient and Facebook's blue are baked into their icons and
+   ignore this. `color` exists for TikTok, whose main glyph is currentColor so
+   it can flip per background: near-black here, on the light field. */
 .input-platform {
   position: absolute;
   right: 3.4rem;
   top: 50%;
-  transform: translateY(-50%) scale(0.6);
+  transform: translateY(-50%);
   opacity: 0;
   width: 26px; height: 26px;
-  color: var(--green);
-  transition: opacity var(--t) var(--ease), transform var(--t) var(--ease-bounce);
+  color: #010101;
+  transition: opacity var(--t-fast) var(--ease);
 }
-.input-platform.show { opacity: 1; transform: translateY(-50%) scale(1); }
+.input-platform.show { opacity: 1; }
 .input-platform svg { width: 100%; height: 100%; }
 
-.paste-btn {
+/* Clear button. Colour-only hover — the scale(1.12) bounce the old paste
+   button had sat inside the field and jumped under the cursor.
+
+   [hidden] needs the display override because `display: grid` below would
+   otherwise beat the UA stylesheet's `[hidden] { display: none }`. */
+.clear-btn {
   position: absolute;
   right: 0.6rem;
   top: 50%;
@@ -853,66 +994,59 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   display: grid;
   place-items: center;
   width: 34px; height: 34px;
-  border-radius: 9px;
-  border: 1px solid var(--glass-brd);
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--ink-dim);
-  transition: color var(--t-fast), background var(--t-fast),
-              transform var(--t-fast) var(--ease-bounce);
+  border-radius: var(--radius-sm);
+  /* Dark-on-light. The white border and rgba(255,255,255,.05) fill this had
+     were invisible once the field went light. Hover is still solid red with a
+     white glyph, which works on either. */
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: rgba(0, 0, 0, 0.04);
+  color: #6b6b6b;
+  transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast);
 }
-.paste-btn svg { width: 17px; height: 17px; }
-.paste-btn:hover {
-  color: var(--yellow);
-  background: var(--yellow-soft);
-  transform: translateY(-50%) scale(1.12);
+.clear-btn[hidden] { display: none; }
+.clear-btn svg { width: 17px; height: 17px; }
+.clear-btn:hover {
+  color: #fff;
+  background: var(--red);
+  border-color: var(--red);
 }
 
 /* ---- Download button ---- */
+/* Flat solid red, not a gradient — and no idle pulse. btnGlowPulse breathed
+   a 44px shadow every 3.2s forever, which is a lot of attention-grabbing for
+   a button sitting next to an empty field. Hover is a straight colour step. */
 .btn-download {
   position: relative;
   flex-shrink: 0;
   display: inline-grid;
   place-items: center;
-  padding: 0 2rem;
+  padding: 0 2.2rem;
   min-height: 60px;
-  border-radius: 16px;
-  background: linear-gradient(100deg, var(--blue), var(--green));
-  background-size: 200% 100%;
+  border-radius: var(--radius);
+  background: var(--red);
   color: #fff;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 1rem;
   letter-spacing: 0.01em;
   overflow: hidden;
   isolation: isolate;
-  box-shadow: 0 10px 30px rgba(37, 99, 235, 0.4);
-  transition: transform var(--t) var(--ease-bounce), box-shadow var(--t) var(--ease),
-              background-position var(--t-slow) var(--ease);
-  animation: btnGlowPulse 3.2s ease-in-out infinite;
+  transition: background var(--t-fast) var(--ease);
 }
-@keyframes btnGlowPulse {
-  0%, 100% { box-shadow: 0 10px 30px rgba(37, 99, 235, 0.4); }
-  50% { box-shadow: 0 14px 44px rgba(16, 185, 129, 0.55); }
-}
-.btn-download:hover {
-  transform: translateY(-3px) scale(1.035);
-  background-position: 100% 0;
-  box-shadow: 0 18px 50px rgba(16, 185, 129, 0.6), 0 0 30px rgba(37, 99, 235, 0.45);
-}
-.btn-download:active { transform: translateY(-1px) scale(0.985); }
+/* Needed for the same reason as .clear-btn[hidden]: `display: inline-grid`
+   above would otherwise beat the UA stylesheet's `[hidden] { display: none }`
+   and the button would stay visible on an empty field. */
+.btn-download[hidden] { display: none; }
+.btn-download:hover { background: var(--red-glow); }
+.btn-download:active { background: var(--red-deep); }
 
 .btn-label {
   display: inline-flex;
   align-items: center;
   gap: 0.55rem;
-  transition: opacity var(--t-fast), transform var(--t-fast) var(--ease);
+  transition: opacity var(--t-fast);
 }
+/* The icon no longer bounces on hover — it's a static mark now. */
 .btn-icon { width: 19px; height: 19px; }
-.btn-download:hover .btn-icon { animation: bounceY 0.6s var(--ease-bounce); }
-@keyframes bounceY {
-  0%, 100% { transform: translateY(0); }
-  40% { transform: translateY(4px); }
-  70% { transform: translateY(-2px); }
-}
 
 /* Loading state */
 .btn-spinner {
@@ -924,8 +1058,12 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   opacity: 0;
   animation: spin 0.75s linear infinite;
 }
-.btn-download.loading { pointer-events: none; animation: none; }
-.btn-download.loading .btn-label { opacity: 0; transform: scale(0.85); }
+/* The spinner is the one animation kept in this section: it's the only thing
+   telling you the server is working, and there's no static way to say that.
+   (`animation: none` used to be needed here to stop the idle glow pulse
+   fighting the loading state — the pulse is gone, so it is too.) */
+.btn-download.loading { pointer-events: none; }
+.btn-download.loading .btn-label { opacity: 0; }
 .btn-download.loading .btn-spinner { opacity: 1; }
 
 /* Ripple (spawned by JS) */
@@ -957,32 +1095,18 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .result-section {
   max-width: 900px;
   margin: 2rem auto 0;
-  perspective: 1400px;
 }
 .result-section[hidden] { display: none; }
 
+/* Plainly visible. This used to start at opacity:0, rotated back 32° on X and
+   scaled down, with cardIn3d animating it upright — so the card was INVISIBLE
+   until the animation ran. Deleting the animation without deleting that start
+   state would have left a panel that opens to nothing.
+   `perspective`, `transform-style` and `transform-origin` went too: with no
+   entrance and no tilt there is nothing on a Z axis to project. */
 .result-card {
   padding: clamp(1.2rem, 3vw, 1.9rem);
   text-align: left;
-  transform-style: preserve-3d;
-  transform-origin: center top;
-  opacity: 0;
-  transform: rotateX(-32deg) translateY(50px) scale(0.9);
-}
-.result-card.in {
-  animation: cardIn3d 0.95s var(--ease-bounce) forwards;
-}
-/* Once the entrance finishes, JS swaps .in for .settled so the animation's
-   forwards fill stops overriding transform and the tilt handler can drive it. */
-.result-card.settled { opacity: 1; }
-@keyframes cardIn3d {
-  0% { opacity: 0; transform: rotateX(-32deg) translateY(50px) scale(0.9); }
-  60% { opacity: 1; transform: rotateX(6deg) translateY(-8px) scale(1.015); }
-  100% { opacity: 1; transform: rotateX(0) translateY(0) scale(1); }
-}
-.result-card.out { animation: cardOut3d 0.4s var(--ease) forwards; }
-@keyframes cardOut3d {
-  to { opacity: 0; transform: rotateX(22deg) translateY(30px) scale(0.94); }
 }
 
 .result-head {
@@ -1000,19 +1124,27 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   align-items: center;
   gap: 0.5rem;
   padding: 0.4rem 0.95rem;
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--glass-brd);
   background: var(--glass-bg);
   font-size: 0.82rem;
   font-weight: 600;
 }
-.result-tag-icon { display: grid; place-items: center; width: 17px; height: 17px; }
+/* Near-black, matching .input-platform: the result card is a light surface in
+   this theme, so TikTok's currentColor glyph goes dark here too. (It was #fff
+   while the card was dark.) The other two icons carry their own colours and
+   ignore this.
+
+   A rule on the element beats a value inherited from .result-tag[data-p=...],
+   regardless of that selector's higher specificity — so the tag's text keeps
+   its red accent while the icon stays near-black. */
+.result-tag-icon { display: grid; place-items: center; width: 17px; height: 17px; color: #010101; }
 .result-tag-icon svg { width: 100%; height: 100%; }
 
 /* Platform accents on the result tag */
-.result-tag[data-p="tiktok"]    { border-color: var(--green);  color: var(--green);  box-shadow: 0 0 22px var(--green-soft); }
-.result-tag[data-p="instagram"] { border-color: var(--yellow); color: var(--yellow); box-shadow: 0 0 22px var(--yellow-soft); }
-.result-tag[data-p="facebook"]  { border-color: var(--blue);   color: var(--blue);   box-shadow: 0 0 22px var(--blue-soft); }
+.result-tag[data-p="tiktok"]    { border-color: var(--red-deep);  color: var(--red-deep);  box-shadow: 0 0 22px var(--red-deep-soft); }
+.result-tag[data-p="instagram"] { border-color: var(--red-glow); color: var(--red-glow); box-shadow: 0 0 22px var(--red-glow-soft); }
+.result-tag[data-p="facebook"]  { border-color: var(--red);   color: var(--red);   box-shadow: 0 0 22px var(--red-soft); }
 
 .result-close {
   display: grid;
@@ -1027,8 +1159,8 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 }
 .result-close:hover {
   transform: rotate(90deg) scale(1.1);
-  color: var(--yellow);
-  border-color: var(--yellow);
+  color: var(--red-glow);
+  border-color: var(--red-glow);
 }
 
 .result-body {
@@ -1042,13 +1174,14 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .preview-thumb {
   position: relative;
   aspect-ratio: 9 / 14;
-  border-radius: 18px;
+  /* Was a hardcoded 18px, from when the theme's radius was 22px. */
+  border-radius: var(--radius);
   overflow: hidden;
   border: 1px solid var(--glass-brd);
   background:
-    radial-gradient(120% 90% at 20% 15%, rgba(37, 99, 235, 0.55), transparent 60%),
-    radial-gradient(100% 80% at 85% 80%, rgba(16, 185, 129, 0.45), transparent 60%),
-    linear-gradient(160deg, #0d1730, #060b18);
+    radial-gradient(120% 90% at 20% 15%, rgba(229, 9, 20, 0.55), transparent 60%),
+    radial-gradient(100% 80% at 85% 80%, rgba(178, 7, 16, 0.45), transparent 60%),
+    linear-gradient(160deg, #1f1f1f, #0a0a0a);
   box-shadow: var(--sh-md);
   display: grid;
   place-items: center;
@@ -1066,17 +1199,14 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   height: 100%;
   object-fit: cover;
   border-radius: inherit;
-  animation: thumbFade 0.5s var(--ease) forwards;
 }
-@keyframes thumbFade { from { opacity: 0; } to { opacity: 1; } }
 
-/* Skeleton shimmer over the fake thumbnail */
+/* Static sheen. The shimmerSweep loop that used to slide this across the
+   thumbnail every 3s is gone; the gradient stays as a fixed highlight. */
 .preview-shine {
   position: absolute;
   inset: 0;
   background: linear-gradient(105deg, transparent 40%, rgba(255, 255, 255, 0.13) 50%, transparent 60%);
-  background-size: 220% 100%;
-  animation: shimmerSweep 3s ease-in-out infinite;
 }
 
 .play-btn {
@@ -1093,25 +1223,22 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   transition: transform var(--t) var(--ease-bounce), background var(--t-fast);
 }
 .play-btn svg { width: 22px; height: 22px; margin-left: 3px; }
+/* A still ring. It used to pulse outward on a 2.2s loop — the one piece of
+   motion that ran forever whenever the panel was open. */
 .play-btn::before {
   content: "";
   position: absolute;
   inset: -6px;
   border-radius: 50%;
   border: 1.5px solid rgba(255, 255, 255, 0.4);
-  animation: pulseOut 2.2s ease-out infinite;
 }
-@keyframes pulseOut {
-  0% { transform: scale(0.85); opacity: 0.9; }
-  100% { transform: scale(1.45); opacity: 0; }
-}
-.play-btn:hover { transform: scale(1.12); background: rgba(255, 255, 255, 0.24); }
+.play-btn:hover { background: rgba(255, 255, 255, 0.24); }
 
 .preview-duration,
 .preview-badge {
   position: absolute;
   padding: 0.18rem 0.55rem;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   font-size: 0.7rem;
   font-weight: 600;
   backdrop-filter: blur(6px);
@@ -1119,15 +1246,20 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 }
 .preview-duration {
   right: 0.6rem; bottom: 0.6rem;
-  background: rgba(4, 8, 20, 0.72);
+  background: rgba(0, 0, 0, 0.72);
   color: var(--ink);
 }
 .preview-badge {
   left: 0.6rem; top: 0.6rem;
-  background: var(--yellow);
-  color: #131a2b;
-  box-shadow: 0 0 18px var(--yellow-soft);
+  background: var(--red-glow);
+  color: #ffffff;
+  box-shadow: 0 0 18px var(--red-glow-soft);
 }
+
+/* A photo post has nothing to play and no runtime — showing a play button over
+   a still image promises a preview that doesn't exist. Set by showResult(). */
+.result-card.is-photo .play-btn,
+.result-card.is-photo .preview-duration { display: none; }
 
 /* ---- Result info ---- */
 .result-title {
@@ -1145,9 +1277,9 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 }
 .result-meta li {
   padding: 0.6rem 0.75rem;
-  border-radius: 12px;
+  border-radius: var(--radius);
   border: 1px solid var(--glass-brd);
-  background: rgba(255, 255, 255, 0.035);
+  background: rgba(0, 0, 0, 0.03);
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
@@ -1178,9 +1310,9 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   column-gap: 0.7rem;
   align-items: center;
   padding: 0.85rem 1rem;
-  border-radius: 14px;
+  border-radius: var(--radius);
   border: 1px solid var(--glass-brd);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(0, 0, 0, 0.03);
   overflow: hidden;
   text-align: left;
   transition: transform var(--t) var(--ease-bounce), box-shadow var(--t) var(--ease),
@@ -1197,45 +1329,86 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .dl-btn:hover { transform: translateY(-4px) scale(1.03); }
 .dl-btn:active { transform: translateY(-1px) scale(0.98); }
 
-.dl-hd { color: var(--green); }
-.dl-hd:hover { background: var(--green-soft); border-color: var(--green); box-shadow: var(--sh-glow-green); }
-
-.dl-sd { color: var(--blue); }
-.dl-sd:hover { background: var(--blue-soft); border-color: var(--blue); box-shadow: var(--sh-glow-blue); }
-
-.dl-mp3 { color: var(--yellow); }
-.dl-mp3:hover { background: var(--yellow-soft); border-color: var(--yellow); box-shadow: var(--sh-glow-yellow); }
-
-.dl-copy { color: var(--ink-dim); }
-.dl-copy:hover {
-  background: rgba(255, 255, 255, 0.09);
-  border-color: var(--glass-hi);
-  color: var(--ink);
-  box-shadow: 0 0 34px rgba(255, 255, 255, 0.12);
-}
-.dl-copy.copied { color: var(--green); border-color: var(--green); background: var(--green-soft); }
-
-.dl-note {
-  margin-top: 1rem;
-  color: var(--ink-faint);
-  font-size: 0.74rem;
-  font-weight: 300;
-}
+.dl-hd { color: var(--red-deep); }
+.dl-hd:hover { background: var(--red-deep-soft); border-color: var(--red-deep); box-shadow: var(--sh-glow-red-deep); }
 
 /* ==========================================================================
    08. HOW IT WORKS
    ========================================================================== */
 
-.steps-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: clamp(1.2rem, 2.5vw, 1.8rem);
+/* ==========================================================================
+   CARD RAILS — shared by How It Works, Platforms, Features and Devices.
+
+   All four were `grid: repeat(auto-fit, minmax(Npx, 1fr))`, which stacks into
+   a long column on a phone. They're now one horizontal scroll-snap rail each.
+
+   The negative margin + matching padding is the trick: it lets the rail bleed
+   out to the container's gutter, so a card runs off the screen edge instead of
+   stopping neatly short. That overhang IS the affordance — a row ending flush
+   at the edge looks like a finished layout, not something you can swipe.
+
+   `flex: 1 0 var(--rail-card)` gives both behaviours from one rule. Where the
+   cards overflow (phones, or any section with a lot of them) they can't grow,
+   so the rail scrolls. Where they fit inside --maxw, flex-grow takes over and
+   they fill the row with nothing to scroll — so wide screens keep the old
+   layout. Each section sets its own --rail-card below.
+   ========================================================================== */
+
+.steps-grid,
+.platform-grid,
+.feature-grid,
+.device-grid {
+  display: flex;
+  align-items: stretch;
+  gap: clamp(0.9rem, 2.5vw, 1.8rem);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  /* overflow-x:auto clips the OTHER axis too, which would shave the cards'
+     hover shadow and 3D tilt off at the top and bottom. So the rail is padded
+     to give them room, and the padding is cancelled again with a matching
+     negative margin so section spacing is unchanged.
+     Inline: -1.25rem == half the .container gutter, giving the edge bleed. */
+  margin: -1rem -1.25rem -1.5rem;
+  padding: 1rem 1.25rem 1.5rem;
+  scrollbar-width: none;            /* the overhang says "scroll", not a bar */
+  -ms-overflow-style: none;
+}
+.steps-grid::-webkit-scrollbar,
+.platform-grid::-webkit-scrollbar,
+.feature-grid::-webkit-scrollbar,
+.device-grid::-webkit-scrollbar { display: none; }
+
+/* Card width per section: roughly its old minmax() floor, with a vw-based
+   basis so one card plus a slice of the next fills a phone. */
+.steps-grid    { --rail-card: clamp(230px, 74vw, 320px); }
+.platform-grid { --rail-card: clamp(240px, 76vw, 300px); }
+.feature-grid  { --rail-card: clamp(200px, 62vw, 250px); }
+.device-grid   { --rail-card: clamp(190px, 64vw, 240px); }
+
+.step-card,
+.platform-card,
+.feature-card,
+.device-card {
+  flex: 1 0 var(--rail-card);
+  scroll-snap-align: start;
+}
+
+/* Headings sit left over their rail. FAQ and the CTA aren't rails and stay
+   centred, so this is a list rather than a change to .section-head itself. */
+#how .section-head,
+#platforms .section-head,
+#features .section-head,
+#devices .section-head {
+  text-align: left;
+  max-width: none;
+  margin-inline: 0;
 }
 
 .step-card {
   position: relative;
   padding: 2rem 1.6rem;
-  text-align: center;
+  text-align: left;
   transform-style: preserve-3d;
   transition: transform var(--t) var(--ease), box-shadow var(--t) var(--ease),
               border-color var(--t-fast);
@@ -1248,18 +1421,19 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   font-size: 3.2rem;
   font-weight: 800;
   line-height: 1;
-  color: rgba(255, 255, 255, 0.05);
+  color: rgba(0, 0, 0, 0.06);
   letter-spacing: -0.04em;
   transition: color var(--t);
 }
-.step-card:hover .step-num { color: rgba(255, 255, 255, 0.11); }
+.step-card:hover .step-num { color: rgba(0, 0, 0, 0.1); }
 
 .step-icon {
   display: grid;
   place-items: center;
   width: 68px; height: 68px;
-  margin: 0 auto 1.2rem;
-  border-radius: 20px;
+  /* Was `0 auto` — centred, which fought the card's left alignment. */
+  margin: 0 0 1.2rem;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--glass-brd);
   transition: transform var(--t) var(--ease-bounce), box-shadow var(--t);
   animation: floatSoft 5s ease-in-out infinite;
@@ -1272,9 +1446,9 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   transform: translateZ(30px) scale(1.12) rotate(-6deg);
 }
 
-.step-icon-blue   { color: var(--blue);   background: var(--blue-soft);   box-shadow: var(--sh-glow-blue); }
-.step-icon-green  { color: var(--green);  background: var(--green-soft);  box-shadow: var(--sh-glow-green);  animation-delay: 0.5s; }
-.step-icon-yellow { color: var(--yellow); background: var(--yellow-soft); box-shadow: var(--sh-glow-yellow); animation-delay: 1s; }
+.step-icon-blue   { color: var(--red);   background: var(--red-soft);   box-shadow: var(--sh-glow-red); }
+.step-icon-green  { color: var(--red-deep);  background: var(--red-deep-soft);  box-shadow: var(--sh-glow-red-deep);  animation-delay: 0.5s; }
+.step-icon-yellow { color: var(--red-glow); background: var(--red-glow-soft); box-shadow: var(--sh-glow-red-glow); animation-delay: 1s; }
 
 @keyframes floatSoft {
   0%, 100% { transform: translateY(0); }
@@ -1291,7 +1465,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   right: calc(-1 * clamp(1.2rem, 2.5vw, 1.8rem) - 2px);
   width: clamp(1.2rem, 2.5vw, 1.8rem);
   height: 2px;
-  background: linear-gradient(90deg, var(--blue), var(--green));
+  background: linear-gradient(90deg, var(--red), var(--red-deep));
   opacity: 0.45;
 }
 .step-line::after {
@@ -1300,9 +1474,9 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   right: 0; top: 50%;
   width: 6px; height: 6px;
   border-radius: 50%;
-  background: var(--green);
+  background: var(--red-deep);
   transform: translateY(-50%);
-  box-shadow: 0 0 10px var(--green);
+  box-shadow: 0 0 10px var(--red-deep);
   animation: dotRun 2.4s var(--ease) infinite;
 }
 @keyframes dotRun {
@@ -1315,16 +1489,14 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
    09. PLATFORMS
    ========================================================================== */
 
-.platform-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
-  gap: clamp(1.2rem, 2.5vw, 1.8rem);
-}
+/* Layout lives in the shared rail rule near the top — this section only sets
+   its --rail-card there. A `display: grid` here would win on source order and
+   silently undo the rail. */
 
 .platform-card {
   position: relative;
   padding: 2.2rem 1.7rem;
-  text-align: center;
+  text-align: left;
   overflow: hidden;
   transform-style: preserve-3d;
   transition: transform var(--t) var(--ease), box-shadow var(--t) var(--ease);
@@ -1336,7 +1508,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   inset: 0;
   border-radius: inherit;
   padding: 1.5px;
-  background: conic-gradient(from var(--ang, 0deg), transparent 55%, var(--accent, var(--blue)) 80%, transparent 95%);
+  background: conic-gradient(from var(--ang, 0deg), transparent 55%, var(--accent, var(--red)) 80%, transparent 95%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
@@ -1353,16 +1525,17 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 @keyframes angSpin { to { --ang: 360deg; } }
 .platform-card:hover .platform-border { opacity: 1; }
 
-.platform-card[data-platform="tiktok"]    { --accent: var(--green); }
-.platform-card[data-platform="instagram"] { --accent: var(--yellow); }
-.platform-card[data-platform="facebook"]  { --accent: var(--blue); }
+.platform-card[data-platform="tiktok"]    { --accent: var(--red-deep); }
+.platform-card[data-platform="instagram"] { --accent: var(--red-glow); }
+.platform-card[data-platform="facebook"]  { --accent: var(--red); }
+.platform-card[data-platform="youtube"]   { --accent: var(--red-deep); }
 
 .platform-icon {
   display: grid;
   place-items: center;
   width: 76px; height: 76px;
-  margin: 0 auto 1.3rem;
-  border-radius: 22px;
+  margin: 0 0 1.3rem;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--glass-brd);
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
@@ -1390,9 +1563,9 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 }
 .platform-tags li {
   padding: 0.22rem 0.7rem;
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--glass-brd);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(0, 0, 0, 0.03);
   font-size: 0.71rem;
   font-weight: 500;
   color: var(--ink-dim);
@@ -1404,16 +1577,12 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
    10. FEATURES
    ========================================================================== */
 
-.feature-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: clamp(0.9rem, 2vw, 1.3rem);
-}
+/* Layout: see the shared rail rule near the top. */
 
 .feature-card {
   position: relative;
   padding: 1.6rem 1.35rem;
-  border-radius: 18px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   transition: transform var(--t) var(--ease-bounce), box-shadow var(--t) var(--ease),
               border-color var(--t-fast);
@@ -1422,7 +1591,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   content: "";
   position: absolute;
   inset: 0;
-  background: radial-gradient(120% 100% at 50% 0%, rgba(255, 255, 255, 0.09), transparent 60%);
+  background: radial-gradient(120% 100% at 50% 0%, rgba(0, 0, 0, 0.04), transparent 60%);
   opacity: 0;
   transition: opacity var(--t);
 }
@@ -1438,19 +1607,19 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   place-items: center;
   width: 48px; height: 48px;
   margin-bottom: 1rem;
-  border-radius: 14px;
+  border-radius: var(--radius);
   border: 1px solid var(--glass-brd);
   transition: transform var(--t) var(--ease-bounce), box-shadow var(--t);
 }
 .feature-icon svg { width: 23px; height: 23px; }
 .feature-card:hover .feature-icon { transform: scale(1.15) rotate(-8deg); }
 
-.fc-blue   { color: var(--blue);   background: var(--blue-soft); }
-.fc-green  { color: var(--green);  background: var(--green-soft); }
-.fc-yellow { color: var(--yellow); background: var(--yellow-soft); }
-.feature-card:hover .fc-blue   { box-shadow: var(--sh-glow-blue); }
-.feature-card:hover .fc-green  { box-shadow: var(--sh-glow-green); }
-.feature-card:hover .fc-yellow { box-shadow: var(--sh-glow-yellow); }
+.fc-blue   { color: var(--red);   background: var(--red-soft); }
+.fc-green  { color: var(--red-deep);  background: var(--red-deep-soft); }
+.fc-yellow { color: var(--red-glow); background: var(--red-glow-soft); }
+.feature-card:hover .fc-blue   { box-shadow: var(--sh-glow-red); }
+.feature-card:hover .fc-green  { box-shadow: var(--sh-glow-red-deep); }
+.feature-card:hover .fc-yellow { box-shadow: var(--sh-glow-red-glow); }
 
 .feature-card h3 { font-size: 1.02rem; font-weight: 600; margin-bottom: 0.35rem; }
 .feature-card p { color: var(--ink-dim); font-size: 0.85rem; font-weight: 300; line-height: 1.6; }
@@ -1459,15 +1628,11 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
    11. DEVICES
    ========================================================================== */
 
-.device-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: clamp(1rem, 2vw, 1.5rem);
-}
+/* Layout: see the shared rail rule near the top. */
 
 .device-card {
   padding: 1.8rem 1.3rem;
-  text-align: center;
+  text-align: left;
   transform-style: preserve-3d;
   transition: transform var(--t) var(--ease), box-shadow var(--t) var(--ease),
               border-color var(--t-fast);
@@ -1478,8 +1643,8 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   display: grid;
   place-items: center;
   width: 60px; height: 60px;
-  margin: 0 auto 1rem;
-  border-radius: 18px;
+  margin: 0 0 1rem;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--glass-brd);
   transition: transform var(--t) var(--ease-bounce), box-shadow var(--t);
   animation: floatSoft 6s ease-in-out infinite;
@@ -1487,12 +1652,12 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .device-icon svg { width: 28px; height: 28px; }
 .device-card:hover .device-icon { animation: none; transform: translateZ(26px) scale(1.14); }
 
-.dc-blue   { color: var(--blue);   background: var(--blue-soft); }
-.dc-green  { color: var(--green);  background: var(--green-soft);  animation-delay: 0.7s; }
-.dc-yellow { color: var(--yellow); background: var(--yellow-soft); animation-delay: 1.4s; }
-.device-card:hover .dc-blue   { box-shadow: var(--sh-glow-blue); }
-.device-card:hover .dc-green  { box-shadow: var(--sh-glow-green); }
-.device-card:hover .dc-yellow { box-shadow: var(--sh-glow-yellow); }
+.dc-blue   { color: var(--red);   background: var(--red-soft); }
+.dc-green  { color: var(--red-deep);  background: var(--red-deep-soft);  animation-delay: 0.7s; }
+.dc-yellow { color: var(--red-glow); background: var(--red-glow-soft); animation-delay: 1.4s; }
+.device-card:hover .dc-blue   { box-shadow: var(--sh-glow-red); }
+.device-card:hover .dc-green  { box-shadow: var(--sh-glow-red-deep); }
+.device-card:hover .dc-yellow { box-shadow: var(--sh-glow-red-glow); }
 
 .device-card h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.25rem; }
 .device-card p { color: var(--ink-faint); font-size: 0.82rem; font-weight: 300; }
@@ -1504,14 +1669,14 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .faq-list { display: grid; gap: 0.85rem; }
 
 .faq-item {
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   transition: border-color var(--t-fast), box-shadow var(--t) var(--ease);
 }
 .faq-item:hover { border-color: var(--glass-hi); }
 .faq-item.open {
-  border-color: rgba(37, 99, 235, 0.5);
-  box-shadow: 0 0 40px rgba(37, 99, 235, 0.18);
+  border-color: rgba(229, 9, 20, 0.5);
+  box-shadow: 0 0 40px rgba(229, 9, 20, 0.18);
 }
 
 .faq-q {
@@ -1527,15 +1692,15 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   color: var(--ink);
   transition: color var(--t-fast), background var(--t-fast);
 }
-.faq-q:hover { background: rgba(255, 255, 255, 0.035); }
-.faq-item.open .faq-q { color: var(--green); }
+.faq-q:hover { background: rgba(0, 0, 0, 0.03); }
+.faq-item.open .faq-q { color: var(--red-deep); }
 
 /* Plus → minus morph */
 .faq-icon {
   position: relative;
   flex-shrink: 0;
   width: 26px; height: 26px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--glass-brd);
   transition: transform var(--t) var(--ease-bounce), border-color var(--t-fast),
               background var(--t-fast);
@@ -1554,8 +1719,8 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .faq-icon::after { width: 2px; height: 11px; }
 .faq-item.open .faq-icon {
   transform: rotate(180deg);
-  border-color: var(--green);
-  background: var(--green-soft);
+  border-color: var(--red-deep);
+  background: var(--red-deep-soft);
 }
 .faq-item.open .faq-icon::after { transform: translate(-50%, -50%) scaleY(0); opacity: 0; }
 
@@ -1592,7 +1757,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .cta-glow {
   position: absolute;
   inset: -50%;
-  background: conic-gradient(from 0deg, transparent, var(--blue-soft), var(--green-soft), var(--yellow-soft), transparent);
+  background: conic-gradient(from 0deg, transparent, var(--red-soft), var(--red-deep-soft), var(--red-glow-soft), transparent);
   animation: spin 16s linear infinite;
   opacity: 0.7;
   pointer-events: none;
@@ -1624,7 +1789,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   place-items: center;
   min-height: 56px;
   padding: 0 1.8rem;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--glass-brd);
   background: var(--glass-bg);
   backdrop-filter: blur(10px);
@@ -1636,9 +1801,9 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 }
 .btn-ghost:hover {
   transform: translateY(-3px);
-  color: var(--yellow);
-  border-color: var(--yellow);
-  box-shadow: var(--sh-glow-yellow);
+  color: var(--red-glow);
+  border-color: var(--red-glow);
+  box-shadow: var(--sh-glow-red-glow);
 }
 
 /* ---- Footer ---- */
@@ -1647,7 +1812,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   z-index: 1;
   padding: 3.5rem 0 2rem;
   margin-top: 2rem;
-  background: rgba(4, 8, 18, 0.55);
+  background: rgba(0, 0, 0, 0.03);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
 }
@@ -1655,7 +1820,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   position: absolute;
   top: 0; left: 0; right: 0;
   height: 2px;
-  background: linear-gradient(90deg, var(--blue), var(--green), var(--yellow), var(--green), var(--blue));
+  background: linear-gradient(90deg, var(--red), var(--red-deep), var(--red-glow), var(--red-deep), var(--red));
   background-size: 300% 100%;
   animation: borderRun 8s linear infinite;
 }
@@ -1698,12 +1863,12 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   position: absolute;
   left: 0; bottom: -3px;
   width: 100%; height: 1.5px;
-  background: var(--green);
+  background: var(--red-deep);
   transform: scaleX(0);
   transform-origin: right;
   transition: transform var(--t) var(--ease);
 }
-.footer-links a:hover { color: var(--green); }
+.footer-links a:hover { color: var(--red-deep); }
 .footer-links a:hover::after { transform: scaleX(1); transform-origin: left; }
 
 .copyright {
@@ -1735,9 +1900,9 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   gap: 0.75rem;
   max-width: min(92vw, 360px);
   padding: 0.85rem 1.1rem;
-  border-radius: 14px;
+  border-radius: var(--radius);
   border: 1px solid var(--glass-brd);
-  background: rgba(10, 16, 34, 0.85);
+  background: rgba(255, 255, 255, 0.97);
   backdrop-filter: blur(16px) saturate(140%);
   -webkit-backdrop-filter: blur(16px) saturate(140%);
   box-shadow: var(--sh-lg);
@@ -1756,16 +1921,20 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   place-items: center;
   flex-shrink: 0;
   width: 28px; height: 28px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
 }
 .toast-icon svg { width: 16px; height: 16px; }
 
-.toast-warn  { border-color: rgba(250, 204, 21, 0.5); }
-.toast-warn .toast-icon  { background: var(--yellow-soft); color: var(--yellow); }
-.toast-ok    { border-color: rgba(16, 185, 129, 0.5); }
-.toast-ok .toast-icon    { background: var(--green-soft); color: var(--green); }
-.toast-info  { border-color: rgba(37, 99, 235, 0.5); }
-.toast-info .toast-icon  { background: var(--blue-soft); color: var(--blue); }
+/* Feedback colours deliberately sit outside the one-hue brand rule. The rest
+   of the page is red-on-black, but "download started" and "that link is dead"
+   must not look identical -- so ok stays green and warn stays amber. A brand
+   palette and a feedback palette are different things. */
+.toast-warn  { border-color: rgba(245, 158, 11, 0.5); }
+.toast-warn .toast-icon  { background: rgba(245, 158, 11, 0.16); color: #f59e0b; }
+.toast-ok    { border-color: rgba(34, 197, 94, 0.5); }
+.toast-ok .toast-icon    { background: rgba(34, 197, 94, 0.16); color: #22c55e; }
+.toast-info  { border-color: rgba(229, 9, 20, 0.5); }
+.toast-info .toast-icon  { background: var(--red-soft); color: var(--red-lite); }
 
 /* Progress sliver that drains as the toast expires */
 .toast::after {
@@ -1792,9 +1961,9 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   display: grid;
   place-items: center;
   width: 46px; height: 46px;
-  border-radius: 14px;
+  border-radius: var(--radius);
   border: 1px solid var(--glass-brd);
-  background: rgba(10, 16, 34, 0.8);
+  background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   color: var(--ink-dim);
@@ -1808,9 +1977,9 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .to-top svg { width: 20px; height: 20px; }
 .to-top.show { opacity: 1; visibility: visible; transform: translateY(0) scale(1); }
 .to-top:hover {
-  color: var(--green);
-  border-color: var(--green);
-  box-shadow: var(--sh-glow-green);
+  color: var(--red-deep);
+  border-color: var(--red-deep);
+  box-shadow: var(--sh-glow-red-deep);
   transform: translateY(-4px) scale(1.06);
 }
 
@@ -1826,7 +1995,10 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .reveal[data-reveal="zoom"] { transform: scale(0.9) translateY(24px); }
 .reveal[data-reveal="left"] { transform: translateX(-40px); }
 .reveal[data-reveal="right"]{ transform: translateX(40px); }
-.reveal.shown { opacity: 1; transform: none; }
+/* translateY(var(--lift)) rather than `none`, so a hover lift has somewhere to
+   live. --lift defaults to 0, which is identical to `none` in effect. A card
+   can't just add its own `transform` on :hover — this rule would beat it. */
+.reveal.shown { opacity: 1; transform: translateY(var(--lift, 0px)); }
 
 /* ---- 3D tilt (JS writes the custom props) ---- */
 .tilt {
@@ -1845,9 +2017,51 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 .reveal[data-reveal="zoom"]:not(.shown).tilt { transform: scale(0.9) translateY(24px); }
 .reveal.shown.tilt {
   transform: perspective(1000px)
+             translateY(var(--lift, 0px))
              rotateX(var(--rx, 0deg))
              rotateY(var(--ry, 0deg))
              translateZ(0);
+}
+
+/* ==========================================================================
+   RAIL CARD HOVER
+
+   These sit after .reveal / .tilt on purpose. Both of those own `transform`
+   at (0,1,0) and (0,3,0), so a card that simply declared `transform` on
+   :hover would either lose outright or wipe out the 3D rotation. The lift
+   travels as --lift instead, which both transforms already compose in.
+
+   The transition is restated here for the same reason: .reveal sets 0.75s on
+   transform, which is right for a once-only entrance and treacle for a hover.
+   Same specificity, later in the file, so this wins.
+   ========================================================================== */
+
+.step-card,
+.platform-card,
+.feature-card,
+.device-card {
+  transition: opacity 0.75s var(--ease),
+              transform 0.32s var(--ease),
+              box-shadow 0.32s var(--ease),
+              border-color var(--t-fast);
+}
+
+.step-card:hover,
+.platform-card:hover,
+.feature-card:hover,
+.device-card:hover {
+  --lift: -8px;
+  box-shadow: var(--sh-lg), 0 0 0 1px var(--red-soft);
+}
+
+/* The rail is scroll-snapped, so a card is usually parked dead-centre under
+   the thumb on a phone. There's no hover there — :active gives touch the same
+   acknowledgement, just tighter. */
+@media (hover: none) {
+  .step-card:active,
+  .platform-card:active,
+  .feature-card:active,
+  .device-card:active { --lift: -3px; }
 }
 
 /* ==========================================================================
@@ -1857,10 +2071,13 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
 /* Tablet & down */
 @media (max-width: 900px) {
   .result-body { grid-template-columns: 1fr; }
-  .preview-wrap { max-width: 230px; margin: 0 auto; }
+  /* Tablet cap. Phones relax this further — see the 640px query. */
+  .preview-wrap { max-width: 260px; margin: 0 auto; }
   .step-line { display: none; }
   .float-icon { opacity: 0.5; }
-  .fi-3, .fi-4 { display: none; }
+  /* Keep one tile per corner and drop the rest. The hero narrows here, so the
+     mid-column tiles start overlapping the text they're meant to frame. */
+  .fi-3, .fi-4, .fi-7, .fi-8, .fi-9 { display: none; }
 }
 
 /* Mobile nav */
@@ -1874,7 +2091,7 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
     align-items: stretch;
     gap: 0.2rem;
     padding: 1rem 1.25rem 1.6rem;
-    background: rgba(6, 11, 24, 0.94);
+    background: rgba(255, 255, 255, 0.97);
     backdrop-filter: blur(18px) saturate(150%);
     -webkit-backdrop-filter: blur(18px) saturate(150%);
     border-bottom: 1px solid var(--glass-brd);
@@ -1890,15 +2107,19 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
     display: block;
     padding: 0.85rem 0.6rem;
     font-size: 1rem;
-    border-radius: 12px;
+    border-radius: var(--radius);
   }
   .nav-link::after { display: none; }
-  .nav-link:hover, .nav-link.active { background: rgba(255, 255, 255, 0.05); transform: none; }
+  .nav-link:hover, .nav-link.active { background: rgba(0, 0, 0, 0.04); transform: none; }
 }
 
 /* Phones */
 @media (max-width: 640px) {
-  :root { --radius: 18px; --nav-h: 66px; }
+  /* No --radius override: the scale is the same on every screen. This line has
+     already been wrong twice — 18px when the theme moved to 6px, then 6px when
+     it moved to 10px. A breakpoint that restates a token drifts every time the
+     token changes, so it only sets what's genuinely size-dependent. */
+  :root { --nav-h: 66px; }
 
   .hero { min-height: auto; padding-top: 2rem; }
   .hero-title { flex-direction: column; gap: 0.2rem; }
@@ -1908,7 +2129,16 @@ html { scrollbar-color: var(--blue) #050913; scrollbar-width: thin; }
   .float-icons { display: none; }
   .scroll-cue { display: none; }
 
-  .dl-grid { grid-template-columns: 1fr 1fr; }
+  /* The video preview. The 900px query caps this at 260px, which on a ~390px
+     phone left it stranded in the middle of the card at well under half the
+     screen. Track the viewport instead, with a ceiling so big phones don't get
+     an absurdly tall 9:14 block. */
+  .preview-wrap { max-width: min(78vw, 320px); }
+
+  /* auto-fit, not a hard 1fr 1fr: there's only one download button now, and a
+     fixed two-column grid left it sitting at half width with a hole beside it.
+     auto-fit stretches a lone button and still wraps photo carousels 2-up. */
+  .dl-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
   .dl-btn { padding: 0.75rem 0.8rem; }
   .dl-btn em { display: none; }
   .dl-btn svg { grid-row: 1; }

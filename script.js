@@ -1,5 +1,5 @@
 /* ==========================================================================
-   VIDEO-HUB — script.js
+   VID VORTEX — script.js
    Vanilla JS. No frameworks, no dependencies.
 
    Modules
@@ -192,7 +192,10 @@
     const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) return;
 
-    const COLORS = ["#2563EB", "#10B981", "#FACC15"];
+    // Kept in step with the --red / --red-deep / --red-glow tokens in style.css.
+    // Canvas can't read CSS custom properties, so these are the one place the
+    // brand values are duplicated — change both together.
+    const COLORS = ["#E50914", "#B20710", "#F6121D"];
     let particles = [];
     let w = 0, h = 0, dpr = 1;
     let running = true;
@@ -270,14 +273,13 @@
   }
 
   /* ========================================================================
-     05. NAVBAR — sticky state, active link, mobile menu, progress
+     05. NAVBAR — sticky state, active link, mobile menu
      ======================================================================== */
 
   function initNavbar() {
     const navbar = $("#navbar");
     const toggle = $("#navToggle");
     const menu = $("#navMenu");
-    const progress = $("#navProgress");
     const toTop = $("#toTop");
     const links = $$(".nav-link");
 
@@ -308,12 +310,6 @@
 
       if (navbar) navbar.classList.toggle("scrolled", y > 12);
       if (toTop) toTop.classList.toggle("show", y > 600);
-
-      // Reading progress
-      if (progress) {
-        const max = document.documentElement.scrollHeight - window.innerHeight;
-        progress.style.width = (max > 0 ? (y / max) * 100 : 0) + "%";
-      }
 
       // Active section — the one occupying the upper third of the viewport.
       const line = y + window.innerHeight * 0.32;
@@ -346,10 +342,10 @@
     const target = $("#typeTarget");
     if (!target) return;
 
-    const words = ["TikTok", "Instagram", "Facebook"];
+    const words = ["TikTok", "Instagram", "Facebook", "YouTube"];
 
     if (prefersReduced) {
-      target.textContent = "TikTok, Instagram & Facebook";
+      target.textContent = "TikTok, Instagram, Facebook & YouTube";
       return;
     }
 
@@ -389,7 +385,16 @@
       name: "TikTok",
       // tiktok.com, vm./vt./m. short links
       pattern: /^(https?:\/\/)?((www|vm|vt|m)\.)?tiktok\.com\/.+/i,
-      icon: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></svg>',
+      /* Real mark: the glyph with the cyan/pink chromatic offset behind it.
+         That offset IS the logo — a single-path version in one colour reads as
+         a generic music note. Hence three copies of the same path.
+
+         The main glyph is currentColor, not a fixed white: this icon renders
+         on the light paste field AND on the dark result panel, and TikTok's
+         own mark flips black/white for exactly that reason. Callers set the
+         colour — see .input-platform and .result-tag-icon. The cyan and pink
+         are fixed; they read on either background. */
+      icon: '<svg viewBox="0 0 24 24"><g fill="#25F4EE" transform="translate(-1.1,-0.9)"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></g><g fill="#FE2C55" transform="translate(1.1,0.9)"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></g><path fill="currentColor" d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></svg>',
       quality: "1080p • HD",
       duration: "00:32",
       size: "12.4 MB",
@@ -399,7 +404,8 @@
       name: "Instagram",
       // /p/, /reel/, /reels/, /tv/, /stories/
       pattern: /^(https?:\/\/)?((www|m)\.)?instagram\.com\/(p|reel|reels|tv|stories)\/.+/i,
-      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1.2" fill="currentColor" stroke="none"/></svg>',
+      // Strokes reference the #igGradient def in index.html, not currentColor.
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="url(#igGradient)" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1.2" fill="url(#igGradient)" stroke="none"/></svg>',
       quality: "1080p • HD",
       duration: "00:47",
       size: "18.9 MB",
@@ -409,11 +415,23 @@
       name: "Facebook",
       // facebook.com/... , fb.watch/... , fb.com/...
       pattern: /^(https?:\/\/)?((www|web|m)\.)?(facebook\.com\/.+|fb\.watch\/.+|fb\.com\/.+)/i,
-      icon: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 12.06C22 6.5 17.52 2 12 2S2 6.5 2 12.06c0 5 3.66 9.15 8.44 9.94v-7.03H7.9v-2.91h2.54V9.85c0-2.52 1.49-3.91 3.77-3.91 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.78-1.63 1.57v1.89h2.78l-.45 2.91h-2.33V22c4.78-.79 8.44-4.94 8.44-9.94Z"/></svg>',
+      icon: '<svg viewBox="0 0 24 24" fill="#1877F2"><path d="M22 12.06C22 6.5 17.52 2 12 2S2 6.5 2 12.06c0 5 3.66 9.15 8.44 9.94v-7.03H7.9v-2.91h2.54V9.85c0-2.52 1.49-3.91 3.77-3.91 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.78-1.63 1.57v1.89h2.78l-.45 2.91h-2.33V22c4.78-.79 8.44-4.94 8.44-9.94Z"/></svg>',
       quality: "720p • HD",
       duration: "01:14",
       size: "24.1 MB",
       title: "Facebook video — HD ready"
+    },
+    youtube: {
+      name: "YouTube",
+      // watch?v=, youtu.be/, shorts/, embed/, live/ — on www, m or music.
+      pattern: /^(https?:\/\/)?((www|m|music)\.)?(youtube\.com\/(watch\?v=|shorts\/|embed\/|live\/)|youtu\.be\/)[\w-]{6,}/i,
+      // The play-button mark: red rounded plate, white triangle. Brand red is
+      // #FF0000 — a purer red than the site's #E50914, and deliberately so.
+      icon: '<svg viewBox="0 0 24 24"><path fill="#FF0000" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.3 31.3 0 0 0 0 12a31.3 31.3 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31.3 31.3 0 0 0 24 12a31.3 31.3 0 0 0-.5-5.8Z"/><path fill="#ffffff" d="M9.6 15.6 15.8 12 9.6 8.4Z"/></svg>',
+      quality: "1080p • HD",
+      duration: "03:52",
+      size: "48.2 MB",
+      title: "YouTube video — 1080p ready to save"
     }
   };
 
@@ -437,47 +455,49 @@
     const wrap = $("#inputWrap");
     const btn = $("#downloadBtn");
     const badge = $("#inputPlatform");
-    const pasteBtn = $("#pasteBtn");
+    const clearBtn = $("#clearBtn");
     if (!form || !input || !btn) return;
 
     // ---- Focus ring state ----
     input.addEventListener("focus", () => wrap.classList.add("focused"));
     input.addEventListener("blur", () => wrap.classList.remove("focused"));
 
-    // ---- Live platform detection while typing ----
-    input.addEventListener("input", () => {
+    /* Everything about the field's appearance is derived from its value, so
+       it lives in one place: typing and clearing both just call this. */
+    function syncField() {
+      const value = input.value.trim();
+      const key = detectPlatform(value);
+
       wrap.classList.remove("invalid");
-      const key = detectPlatform(input.value);
-
       wrap.classList.toggle("valid", Boolean(key));
-      if (key && badge) {
-        badge.innerHTML = PLATFORMS[key].icon;
-        badge.classList.add("show");
-      } else if (badge) {
-        badge.classList.remove("show");
-      }
-    });
 
-    // ---- Paste from clipboard ----
-    if (pasteBtn) {
-      pasteBtn.addEventListener("click", async () => {
-        try {
-          const text = await navigator.clipboard.readText();
-          if (!text) {
-            toast("warn", "Your clipboard is empty.");
-            return;
-          }
-          input.value = text.trim();
-          input.dispatchEvent(new Event("input"));
-          input.focus();
-          toast("info", "Link pasted from clipboard.");
-        } catch {
-          // Clipboard API needs permission / HTTPS — fall back to a nudge.
-          input.focus();
-          toast("warn", "Clipboard blocked — paste manually with Ctrl+V.");
-        }
+      if (badge) {
+        if (key) badge.innerHTML = PLATFORMS[key].icon;
+        badge.classList.toggle("show", Boolean(key));
+      }
+
+      // Nothing to clear, and nothing to download, on an empty field.
+      if (clearBtn) clearBtn.hidden = value === "";
+      if (btn) btn.hidden = value === "";
+    }
+
+    input.addEventListener("input", syncField);
+
+    // ---- Clear the field ----
+    if (clearBtn) {
+      clearBtn.addEventListener("click", () => {
+        input.value = "";
+        syncField();
+        // Focus goes back to the input, not the button that was just hidden —
+        // otherwise the tab ring lands on a display:none element.
+        input.focus();
       });
     }
+
+    // The field can hold a value on load (bfcache restore, or a browser
+    // repopulating it on refresh), so derive the initial state rather than
+    // assuming it starts empty.
+    syncField();
 
     // ---- Submit ----
     form.addEventListener("submit", (e) => {
@@ -505,7 +525,7 @@
       const key = detectPlatform(value);
       if (!key) {
         wrap.classList.add("invalid");
-        toast("warn", "Unsupported link. Use TikTok, Instagram or Facebook.");
+        toast("warn", "Unsupported link. Use TikTok, Instagram, Facebook or YouTube.");
         setTimeout(() => wrap.classList.remove("invalid"), 700);
         return;
       }
@@ -593,6 +613,12 @@
     // report duration/filesize for every video on every platform.
     const d = info || {};
 
+    // An Instagram /p/ link can be a photo post. Those have no duration, no
+    // bitrate and no audio track, so the video furniture — play button,
+    // runtime, the HD download — is meaningless and gets swapped out.
+    const isPhoto = d.kind === "photo";
+    card.classList.toggle("is-photo", isPhoto);
+
     // ---- Fill in the details ----
     const tag = $("#resultPlatformTag");
     if (tag) tag.dataset.p = key;
@@ -602,100 +628,36 @@
     setText("#metaPlatform", d.platformName || p.name);
     setText("#metaQuality", d.quality || p.quality);
     setText("#metaSize", d.size || (info ? "Unknown" : p.size));
-    setText("#previewDuration", d.duration || p.duration);
+    setText("#previewBadge", isPhoto ? (d.count > 1 ? `${d.count} photos` : "Photo") : "HD");
+    // Guard the fallback: `d.duration` is null for a photo, and without the
+    // isPhoto check it would land on PLATFORMS' canned "00:32" runtime.
+    setText("#previewDuration", isPhoto ? "" : (d.duration || p.duration));
     setThumbnail(d.thumbnail);
 
-    if (API_BASE) {
-      // Real download endpoints — the server streams the file back with a
-      // Content-Disposition header, so the browser saves rather than plays it.
-      const q = encodeURIComponent(url);
-      setAttr("#dlHd", "href", `${API_BASE}/api/download?url=${q}&format=hd`);
-      setAttr("#dlSd", "href", `${API_BASE}/api/download?url=${q}&format=sd`);
-      setAttr("#dlMp3", "href", `${API_BASE}/api/download?url=${q}&format=mp3`);
-    } else {
-      const slug = key + "-video";
-      setAttr("#dlHd", "href", `#download-${slug}-1080p`);
-      setAttr("#dlSd", "href", `#download-${slug}-480p`);
-      setAttr("#dlMp3", "href", `#download-${slug}-audio`);
-    }
+    renderDownloadButtons(key, url, d, isPhoto);
 
-    // Remember the source link for the Copy button.
-    card.dataset.sourceUrl = url;
-
-    // ---- Reveal with the 3D entrance ----
+    /* ---- Reveal ----
+       Just show it. This used to add .in, force a reflow to replay a 3D
+       entrance, then wait on animationend to hand the transform back to the
+       tilt handler — none of which has anything to do any more: the entrance,
+       the exit and the tilt are all gone. */
     section.hidden = false;
-    card.classList.remove("out", "settled");
-    // Restart the animation even if the panel was already open.
-    card.classList.remove("in");
-    void card.offsetWidth; // force reflow so the animation replays
-    card.classList.add("in");
 
-    // Hand transform back to the tilt handler once the entrance settles —
-    // the animation's forwards fill would otherwise keep overriding it.
-    card.addEventListener("animationend", function done(e) {
-      if (e.animationName !== "cardIn3d") return;
-      card.removeEventListener("animationend", done);
-      card.classList.remove("in");
-      card.classList.add("settled");
+    section.scrollIntoView({
+      behavior: prefersReduced ? "auto" : "smooth",
+      block: "center"
     });
-
-    // Scroll it into view once it has started animating in.
-    setTimeout(() => {
-      section.scrollIntoView({
-        behavior: prefersReduced ? "auto" : "smooth",
-        block: "center"
-      });
-    }, 180);
   }
 
   function initResultPanel() {
     const section = $("#resultSection");
     const card = $("#resultCard");
     const close = $("#resultClose");
-    const copy = $("#dlCopy");
 
+    // Closes immediately. The 400ms timeout here was waiting out the exit
+    // animation before hiding; with no animation it was just a delay.
     if (close && section && card) {
-      close.addEventListener("click", () => {
-        card.classList.remove("in", "settled");
-        card.classList.add("out");
-        setTimeout(() => {
-          section.hidden = true;
-          card.classList.remove("out");
-        }, 400);
-      });
-    }
-
-    // Copy the source link.
-    if (copy && card) {
-      copy.addEventListener("click", async () => {
-        const url = card.dataset.sourceUrl || "";
-        const label = $("span", copy);
-        const original = label ? label.textContent : "";
-
-        try {
-          await navigator.clipboard.writeText(url);
-        } catch {
-          // Fallback for browsers without the async clipboard API.
-          const tmp = document.createElement("textarea");
-          tmp.value = url;
-          tmp.setAttribute("readonly", "");
-          tmp.style.position = "absolute";
-          tmp.style.left = "-9999px";
-          document.body.appendChild(tmp);
-          tmp.select();
-          try { document.execCommand("copy"); } catch { /* nothing else to try */ }
-          document.body.removeChild(tmp);
-        }
-
-        copy.classList.add("copied");
-        if (label) label.textContent = "Copied!";
-        toast("ok", "Link copied to clipboard.");
-
-        setTimeout(() => {
-          copy.classList.remove("copied");
-          if (label) label.textContent = original;
-        }, 1800);
-      });
+      close.addEventListener("click", () => { section.hidden = true; });
     }
 
     $$(".dl-btn[download]").forEach((a) => {
@@ -718,6 +680,64 @@
         toast("info", `${kind} started — check your downloads.`);
       });
     });
+  }
+
+  /* Same download arrow the static HD button uses. */
+  const DL_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>';
+
+  /**
+   * Point the download buttons at the API.
+   *
+   * A photo post gets one button per image instead of a single "download all":
+   * the server streams one image per request (?i=N), because zipping a carousel
+   * would mean buffering the whole thing in a 512MB box to build the archive.
+   *
+   * The static HD button is hidden rather than rewritten, so the video path
+   * keeps its markup and its click handler untouched.
+   */
+  function renderDownloadButtons(key, url, d, isPhoto) {
+    const grid = $(".dl-grid");
+    const q = encodeURIComponent(url);
+
+    // Clear buttons injected for a previous photo post — the panel is reused.
+    if (grid) $$(".dl-photo", grid).forEach((el) => el.remove());
+    const hd = $("#dlHd");
+    if (hd) hd.hidden = isPhoto;
+
+    if (!isPhoto) {
+      if (API_BASE) {
+        // Real endpoint — the server streams the file back with a
+        // Content-Disposition header, so the browser saves rather than plays it.
+        setAttr("#dlHd", "href", `${API_BASE}/api/download?url=${q}&format=hd`);
+      } else {
+        setAttr("#dlHd", "href", `#download-${key}-video-1080p`);
+      }
+      return;
+    }
+
+    if (!grid) return;
+    const count = Math.max(1, d.count || 1);
+
+    for (let i = 0; i < count; i++) {
+      const a = document.createElement("a");
+      a.className = "dl-btn dl-hd dl-photo";
+      a.href = `${API_BASE}/api/download?url=${q}&format=photo&i=${i}`;
+      a.setAttribute("download", "");
+
+      const label = count > 1 ? `Photo ${i + 1}` : "Download Photo";
+      const sub = count > 1 ? `${i + 1} of ${count}` : "Original";
+      a.innerHTML = `${DL_ICON}<span>${label}</span><em>${sub}</em>`;
+
+      // These are built after initResultPanel() wired the static buttons, so
+      // they need their own toast.
+      a.addEventListener("click", () => {
+        toast("info", `${label} started — check your downloads.`);
+      });
+
+      // Append: these used to be inserted before the Copy button, which was
+      // the last cell in the grid. There's nothing after them now.
+      grid.appendChild(a);
+    }
   }
 
   /**
@@ -813,7 +833,21 @@
           io.unobserve(el); // reveal once, then stop watching
         });
       },
-      { threshold: 0.12, rootMargin: "0px 0px -8% 0px" }
+      /* The wide left/right margin is for the card rails.
+
+         This observer was written for a vertical grid, where everything is
+         inside the viewport horizontally and only height decides visibility.
+         The rails changed that: their cards sit up to ~2000px off to the
+         right, so they never intersect and stay at opacity 0 until swiped to
+         — meaning you'd swipe into a blank card that then faded up 240ms
+         later, entrance animation and all. Widening the root horizontally
+         lets a whole rail reveal together when the section scrolls into view,
+         so swiping reveals cards that are already there.
+
+         Vertical stays tight (-8%), which is what actually gates the reveal.
+         Nothing else on the page lives off to the side, so this is a no-op
+         everywhere except the rails. */
+      { threshold: 0.12, rootMargin: "0px 2500px -8% 0px" }
     );
 
     els.forEach((el) => io.observe(el));

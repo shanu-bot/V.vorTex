@@ -1,4 +1,4 @@
-# Video-Hub API
+# Vid VorTex API
 
 The resolver behind the Download buttons. The website itself is static and can
 live on GitHub Pages; this part cannot, because it has to run `yt-dlp`.
@@ -86,7 +86,8 @@ Railway and Fly.io work the same way — both detect the `Dockerfile`.
 | `PORT` | `8080` | Your host usually sets this. Don't hardcode it. |
 | `ALLOWED_ORIGINS` | *(any)* | Comma-separated. **Set this in production** or anyone can point their site at your server and burn your bandwidth. |
 | `YTDLP_PATH` | `yt-dlp` | Override if it isn't on PATH. |
-| `FFMPEG_PATH` | `ffmpeg` | Only used by the `mp3` route. |
+| `FFMPEG_PATH` | `ffmpeg` | Required, not optional — every video download merges a separate video and audio stream into the MP4, and `mp3` transcodes with it. Also passed to yt-dlp as `--ffmpeg-location` when set. |
+| `MAX_QUALITY` | *(off)* | Set to `1` for pure `bv*+ba/b` — highest resolution wins, codec be damned. Off by default, which prefers H.264+AAC so the file opens on anything; the trade is that YouTube publishes no H.264 above 1080p, so a 4K upload arrives as 1080p. |
 
 ## Maintenance — the part people skip
 

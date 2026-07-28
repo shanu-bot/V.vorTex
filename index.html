@@ -3,18 +3,20 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<meta name="description" content="Video-Hub — Download TikTok, Instagram & Facebook videos instantly. Free, fast, no login required." />
-<meta name="theme-color" content="#2563EB" />
-<title>Video-Hub — Download TikTok, Instagram & Facebook Videos</title>
+<meta name="description" content="Vid VorTex — Download TikTok, Instagram, Facebook & YouTube videos instantly. Free, fast, no login required." />
+<meta name="theme-color" content="#ffffff" />
+<title>Vid VorTex — Download TikTok, Instagram, Facebook & YouTube Videos</title>
 
-<!-- Poppins font -->
+<!-- Inter font -->
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
 
-<!-- Same mark as the header, flattened to solid brand colours (a data: URI
-     favicon can't reference the page's gradient defs). %23 is an escaped '#'. -->
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'><g fill='none' stroke-width='4.6' stroke-linecap='round'><circle cx='24' cy='24' r='17' stroke='%232563EB' stroke-dasharray='30 76.81'/><circle cx='24' cy='24' r='17' stroke='%2310B981' stroke-dasharray='30 76.81' stroke-dashoffset='-35.6'/><circle cx='24' cy='24' r='17' stroke='%23FACC15' stroke-dasharray='30 76.81' stroke-dashoffset='-71.2'/></g><path d='M20.6 16.9 32.4 24 20.6 31.1Z' fill='%232563EB' stroke='%232563EB' stroke-width='2.6' stroke-linejoin='round'/></svg>" />
+<!-- Same mark as the header, flattened to a solid fill (a data: URI favicon
+     can't reference the page's gradient defs). %23 is an escaped '#'.
+     The orbit arcs are dropped and the disc grown to fill the frame: at 16px
+     in a tab, thin arcs are mud — only the disc and play glyph survive. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'><g fill='%23E50914'><path d='M4,6 L13,6 L21.5,30 L29.5,6 L37.5,6 L21.5,45.5 Z'/><path d='M29.5,6 C42,6 46.5,15 46,24.5 C45.4,35 35.5,42.5 21.5,45.5 C31,39.5 38.5,31.5 39,23.8 C39.4,15.8 36,11 29,11 Z'/><path d='M31.7,19.6 L37.6,24 L31.7,28.4 Z'/></g></svg>" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -26,17 +28,24 @@
      ever duplicated. -->
 <svg class="svg-defs" aria-hidden="true" focusable="false">
   <defs>
-    <linearGradient id="vhBlue" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#7cb6ff" /><stop offset="1" stop-color="#2563EB" />
+    <!-- The VD monogram fill. Lit top-left to deep bottom-right so the mark
+         reads as a solid object rather than a flat cut-out. -->
+    <linearGradient id="vhMark" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#FF3B44" />
+      <stop offset="0.55" stop-color="#E50914" />
+      <stop offset="1" stop-color="#A80510" />
     </linearGradient>
-    <linearGradient id="vhGreen" x1="1" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#4ade9f" /><stop offset="1" stop-color="#10B981" />
-    </linearGradient>
-    <linearGradient id="vhYellow" x1="1" y1="1" x2="0" y2="0">
-      <stop offset="0" stop-color="#fde68a" /><stop offset="1" stop-color="#FACC15" />
-    </linearGradient>
-    <linearGradient id="vhPlay" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#93c5fd" /><stop offset="1" stop-color="#2563EB" />
+
+    <!-- Instagram's glyph gradient, running bottom-left to top-right as the
+         real mark does. Lives here rather than inside the icon markup because
+         the icon is injected in two places (the field badge and the result
+         panel) — inlining it would put a duplicate id in the DOM. -->
+    <linearGradient id="igGradient" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#FEDA75" />
+      <stop offset="0.25" stop-color="#FA7E1E" />
+      <stop offset="0.5" stop-color="#D62976" />
+      <stop offset="0.75" stop-color="#962FBF" />
+      <stop offset="1" stop-color="#4F5BD5" />
     </linearGradient>
   </defs>
 </svg>
@@ -44,7 +53,7 @@
 <!-- ============ PAGE LOADER ============ -->
 <div class="page-loader" id="pageLoader">
   <div class="loader-ring"></div>
-  <p class="loader-text">Video-Hub</p>
+  <p class="loader-text">Vid VorTex</p>
 </div>
 
 <!-- ============ ANIMATED CURSOR ============ -->
@@ -66,15 +75,14 @@
   <nav class="nav-inner container" aria-label="Main navigation">
     <a href="#home" class="nav-logo">
       <svg class="logo-mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
-        <g class="lm-ring" fill="none" stroke-width="4.6" stroke-linecap="round">
-          <circle cx="24" cy="24" r="17" stroke="url(#vhBlue)" stroke-dasharray="30 76.81" />
-          <circle cx="24" cy="24" r="17" stroke="url(#vhGreen)" stroke-dasharray="30 76.81" stroke-dashoffset="-35.6" />
-          <circle cx="24" cy="24" r="17" stroke="url(#vhYellow)" stroke-dasharray="30 76.81" stroke-dashoffset="-71.2" />
-        </g>
-        <path class="lm-play" d="M20.6 16.9 32.4 24 20.6 31.1Z" fill="url(#vhPlay)"
-              stroke="url(#vhPlay)" stroke-width="2.6" stroke-linejoin="round" />
+        <!-- VD monogram: the V doubles as the D's stem, and the play glyph sits in
+             the D's counter. Hand-built flat SVG rather than the 3D artwork:
+             it stays crisp at 30px in the navbar and recolours from tokens. -->
+        <path class="lm-v" fill="url(#vhMark)" d="M4,6 L13,6 L21.5,30 L29.5,6 L37.5,6 L21.5,45.5 Z" />
+        <path class="lm-d" fill="url(#vhMark)" d="M29.5,6 C42,6 46.5,15 46,24.5 C45.4,35 35.5,42.5 21.5,45.5 C31,39.5 38.5,31.5 39,23.8 C39.4,15.8 36,11 29,11 Z" />
+        <path class="lm-play" fill="url(#vhMark)" d="M31.7,19.6 L37.6,24 L31.7,28.4 Z" />
       </svg>
-      <span class="nav-logo-text">Video-Hub</span>
+      <span class="nav-logo-text">Vid VorTex</span>
     </a>
 
     <ul class="nav-menu" id="navMenu">
@@ -89,7 +97,6 @@
       <span></span><span></span><span></span>
     </button>
   </nav>
-  <div class="nav-progress" id="navProgress"></div>
 </header>
 
 <main>
@@ -100,20 +107,40 @@
 
     <!-- Floating 3D icons -->
     <div class="float-icons" aria-hidden="true">
+      <!-- fi-1/2/3 are real logos and carry their own brand colours. fi-4 and
+           fi-5 are plain UI glyphs, not marks, so they stay on the red accent
+           via currentColor. TikTok's main glyph is near-black: these cards are
+           light surfaces. -->
       <div class="float-icon fi-1" data-depth="2.2">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></svg>
+        <svg viewBox="0 0 24 24"><g fill="#25F4EE" transform="translate(-1.1,-0.9)"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></g><g fill="#FE2C55" transform="translate(1.1,0.9)"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></g><path fill="#010101" d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></svg>
       </div>
       <div class="float-icon fi-2" data-depth="3">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1.2" fill="currentColor" stroke="none"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="url(#igGradient)" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1.2" fill="url(#igGradient)" stroke="none"/></svg>
       </div>
       <div class="float-icon fi-3" data-depth="1.6">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 12.06C22 6.5 17.52 2 12 2S2 6.5 2 12.06c0 5 3.66 9.15 8.44 9.94v-7.03H7.9v-2.91h2.54V9.85c0-2.52 1.49-3.91 3.77-3.91 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.78-1.63 1.57v1.89h2.78l-.45 2.91h-2.33V22c4.78-.79 8.44-4.94 8.44-9.94Z"/></svg>
+        <svg viewBox="0 0 24 24" fill="#1877F2"><path d="M22 12.06C22 6.5 17.52 2 12 2S2 6.5 2 12.06c0 5 3.66 9.15 8.44 9.94v-7.03H7.9v-2.91h2.54V9.85c0-2.52 1.49-3.91 3.77-3.91 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.78-1.63 1.57v1.89h2.78l-.45 2.91h-2.33V22c4.78-.79 8.44-4.94 8.44-9.94Z"/></svg>
       </div>
       <div class="float-icon fi-4" data-depth="2.6">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
       </div>
       <div class="float-icon fi-5" data-depth="2">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg>
+      </div>
+      <!-- YouTube: the one supported platform that had no floating tile. -->
+      <div class="float-icon fi-6" data-depth="2.4">
+        <svg viewBox="0 0 24 24"><path fill="#FF0000" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.3 31.3 0 0 0 0 12a31.3 31.3 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31.3 31.3 0 0 0 24 12a31.3 31.3 0 0 0-.5-5.8Z"/><path fill="#ffffff" d="M9.6 15.6 15.8 12 9.6 8.4Z"/></svg>
+      </div>
+      <!-- Paste-a-link -->
+      <div class="float-icon fi-7" data-depth="1.8">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+      </div>
+      <!-- Saved -->
+      <div class="float-icon fi-8" data-depth="2.8">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8.2 12.2 2.6 2.6 5-5.6"/></svg>
+      </div>
+      <!-- Fast -->
+      <div class="float-icon fi-9" data-depth="1.4">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z"/></svg>
       </div>
     </div>
 
@@ -123,16 +150,24 @@
 
     <h1 class="hero-title reveal" data-reveal="up">
       <svg class="logo-mark hero-logo-mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
-        <g class="lm-ring" fill="none" stroke-width="4.6" stroke-linecap="round">
-          <circle cx="24" cy="24" r="17" stroke="url(#vhBlue)" stroke-dasharray="30 76.81" />
-          <circle cx="24" cy="24" r="17" stroke="url(#vhGreen)" stroke-dasharray="30 76.81" stroke-dashoffset="-35.6" />
-          <circle cx="24" cy="24" r="17" stroke="url(#vhYellow)" stroke-dasharray="30 76.81" stroke-dashoffset="-71.2" />
-        </g>
-        <path class="lm-play" d="M20.6 16.9 32.4 24 20.6 31.1Z" fill="url(#vhPlay)"
-              stroke="url(#vhPlay)" stroke-width="2.6" stroke-linejoin="round" />
+        <!-- VD monogram: the V doubles as the D's stem, and the play glyph sits in
+             the D's counter. Hand-built flat SVG rather than the 3D artwork:
+             it stays crisp at 30px in the navbar and recolours from tokens. -->
+        <path class="lm-v" fill="url(#vhMark)" d="M4,6 L13,6 L21.5,30 L29.5,6 L37.5,6 L21.5,45.5 Z" />
+        <path class="lm-d" fill="url(#vhMark)" d="M29.5,6 C42,6 46.5,15 46,24.5 C45.4,35 35.5,42.5 21.5,45.5 C31,39.5 38.5,31.5 39,23.8 C39.4,15.8 36,11 29,11 Z" />
+        <path class="lm-play" fill="url(#vhMark)" d="M31.7,19.6 L37.6,24 L31.7,28.4 Z" />
       </svg>
-      <span class="gradient-text shimmer">Video-Hub</span>
+      <!-- Two-tone lockup. "VorTex" is dark ink, not the reference's white:
+           that artwork sits on black, and white type on this white page would
+           be an invisible hole. Same contrast relationship, inverted ground. -->
+      <span class="hero-wordmark">
+        <span class="wm-vid">Vid</span> <span class="wm-vortex">VorTe<span class="wm-x">x</span></span>
+      </span>
     </h1>
+
+    <p class="hero-tagline reveal" data-reveal="fade" data-delay="80">
+      Fast<i>.</i> Simple<i>.</i> Video<i>.</i>
+    </p>
 
     <p class="hero-subtitle reveal" data-reveal="up" data-delay="100">
       Download <span class="type-target" id="typeTarget"></span><span class="type-caret"></span> videos instantly.
@@ -142,10 +177,21 @@
       Paste a link. Hit download. That's it.
     </p>
 
-    <!-- ---- Paste Link Card ---- -->
-    <div class="paste-card glass tilt reveal" data-reveal="up" data-delay="300" id="pasteCard">
-      <div class="paste-glow" aria-hidden="true"></div>
+    <!-- ---- Paste Link Card ----
+         Deliberately static: no `tilt` (3D mouse-follow), no `reveal` (scroll
+         entrance), and no .paste-glow ring. This is the one control the whole
+         page exists to serve, so it holds still while everything around it
+         moves. The only motion left is the submit spinner. -->
+    <div class="paste-card glass" id="pasteCard">
+      <!-- Red header band. Full-bleed to the card edges, which is why the
+           card's padding moved onto .paste-body below — padding on the card
+           itself would inset the band. -->
+      <div class="paste-head">
+        <svg class="paste-head-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+        <span>Paste your video link</span>
+      </div>
 
+      <div class="paste-body">
       <form class="paste-form" id="downloadForm" novalidate>
         <div class="input-wrap" id="inputWrap">
           <input
@@ -159,12 +205,20 @@
           />
           <label for="videoUrl" class="float-label">Paste your video link here...</label>
           <span class="input-platform" id="inputPlatform" aria-hidden="true"></span>
-          <button type="button" class="paste-btn" id="pasteBtn" title="Paste from clipboard" aria-label="Paste from clipboard">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+          <!-- Clear, not paste. Ctrl+V already pastes; the clipboard button
+               duplicated that and needed a permission prompt to do it. This
+               is hidden on an empty field — a clear button with nothing to
+               clear is a dead control. JS toggles .show. -->
+          <button type="button" class="clear-btn" id="clearBtn" title="Clear link" aria-label="Clear link" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
         </div>
 
-        <button type="submit" class="btn-download ripple" id="downloadBtn">
+        <!-- Hidden until the field has something in it; JS toggles this in
+             syncField(). Shown on any text rather than only on a recognised
+             link, so an unsupported URL still has a button to press and can
+             be told why it won't work. -->
+        <button type="submit" class="btn-download" id="downloadBtn" hidden>
           <span class="btn-label">
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
             Download
@@ -174,20 +228,43 @@
       </form>
 
       <p class="paste-hint">
-        Works with TikTok, Instagram Reels &amp; Facebook videos
+        Works with TikTok, Instagram Reels, Facebook &amp; YouTube
       </p>
+      </div><!-- /.paste-body -->
     </div>
 
     <!-- ---- Supported chips ---- -->
     <div class="hero-chips reveal" data-reveal="up" data-delay="400">
-      <span class="chip chip-tiktok">TikTok</span>
-      <span class="chip chip-instagram">Instagram</span>
-      <span class="chip chip-facebook">Facebook</span>
+      <!-- Icons carry their own brand colours and ignore the chip's `color`.
+           TikTok's main glyph is near-black because the chips sit on the white
+           ground — same reasoning as the platform cards above.
+
+           Icon-only visually. Each name stays in an .sr-only span rather than
+           being deleted: to a screen reader these are three unlabelled shapes
+           otherwise, and the logos are the only thing naming the platform. -->
+      <span class="chip chip-tiktok">
+        <svg class="chip-icon" viewBox="0 0 24 24" aria-hidden="true"><g fill="#25F4EE" transform="translate(-1.1,-0.9)"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></g><g fill="#FE2C55" transform="translate(1.1,0.9)"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></g><path fill="#010101" d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></svg>
+        <span class="sr-only">TikTok</span>
+      </span>
+      <span class="chip chip-instagram">
+        <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="url(#igGradient)" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1.2" fill="url(#igGradient)" stroke="none"/></svg>
+        <span class="sr-only">Instagram</span>
+      </span>
+      <span class="chip chip-facebook">
+        <svg class="chip-icon" viewBox="0 0 24 24" fill="#1877F2" aria-hidden="true"><path d="M22 12.06C22 6.5 17.52 2 12 2S2 6.5 2 12.06c0 5 3.66 9.15 8.44 9.94v-7.03H7.9v-2.91h2.54V9.85c0-2.52 1.49-3.91 3.77-3.91 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.78-1.63 1.57v1.89h2.78l-.45 2.91h-2.33V22c4.78-.79 8.44-4.94 8.44-9.94Z"/></svg>
+        <span class="sr-only">Facebook</span>
+      </span>
+      <span class="chip chip-youtube">
+        <svg class="chip-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="#FF0000" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.3 31.3 0 0 0 0 12a31.3 31.3 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31.3 31.3 0 0 0 24 12a31.3 31.3 0 0 0-.5-5.8Z"/><path fill="#ffffff" d="M9.6 15.6 15.8 12 9.6 8.4Z"/></svg>
+        <span class="sr-only">YouTube</span>
+      </span>
     </div>
 
     <!-- ---- Download Result Section (hidden initially) ---- -->
     <section class="result-section" id="resultSection" aria-live="polite" hidden>
-      <div class="result-card glass tilt" id="resultCard">
+      <!-- No `tilt`: the 3D mouse-follow is gone, along with the card's
+           entrance/exit animations. The panel just appears. -->
+      <div class="result-card glass" id="resultCard">
         <div class="result-head">
           <span class="result-tag" id="resultPlatformTag">
             <span class="result-tag-icon" id="resultPlatformIcon"></span>
@@ -217,7 +294,6 @@
               <li><span class="meta-k">Platform</span><span class="meta-v" id="metaPlatform">TikTok</span></li>
               <li><span class="meta-k">Quality</span><span class="meta-v" id="metaQuality">1080p • HD</span></li>
               <li><span class="meta-k">Size</span><span class="meta-v" id="metaSize">12.4 MB</span></li>
-              <li><span class="meta-k">Format</span><span class="meta-v">MP4 / MP3</span></li>
             </ul>
 
             <div class="dl-grid">
@@ -226,24 +302,8 @@
                 <span>Download HD</span>
                 <em>1080p</em>
               </a>
-              <a class="dl-btn dl-sd ripple" id="dlSd" href="#" download>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
-                <span>Download SD</span>
-                <em>480p</em>
-              </a>
-              <a class="dl-btn dl-mp3 ripple" id="dlMp3" href="#" download>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>
-                <span>Download MP3</span>
-                <em>Audio</em>
-              </a>
-              <button class="dl-btn dl-copy ripple" id="dlCopy" type="button">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                <span>Copy Link</span>
-                <em>Share</em>
-              </button>
             </div>
 
-            <p class="dl-note">Demo mode — links are placeholders for GitHub Pages.</p>
           </div>
         </div>
       </div>
@@ -273,7 +333,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
         </div>
         <h3>Paste Link</h3>
-        <p>Copy the video link from TikTok, Instagram or Facebook and drop it into the box above.</p>
+        <p>Copy the video link from TikTok, Instagram, Facebook or YouTube and drop it into the box above.</p>
         <span class="step-line" aria-hidden="true"></span>
       </article>
 
@@ -293,7 +353,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
         </div>
         <h3>Save Video</h3>
-        <p>Pick HD, SD or MP3 and save straight to your phone, tablet or desktop. Done.</p>
+        <p>Hit Download and it saves straight to your phone, tablet or desktop. Done.</p>
       </article>
     </div>
   </div>
@@ -312,17 +372,23 @@
       <article class="platform-card glass tilt reveal" data-reveal="zoom" data-platform="tiktok">
         <span class="platform-border" aria-hidden="true"></span>
         <div class="platform-icon">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></svg>
+          <!-- Brand colours, not currentColor: the cyan/pink offset is the
+               TikTok mark. Main glyph near-black, matching TikTok's own
+               light-background version — this card is a light surface now.
+               PLATFORMS.tiktok.icon in script.js uses currentColor instead,
+               since it renders in two places; same paths, different fill. -->
+          <svg viewBox="0 0 24 24"><g fill="#25F4EE" transform="translate(-1.1,-0.9)"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></g><g fill="#FE2C55" transform="translate(1.1,0.9)"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></g><path fill="#010101" d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .6-5.1V9.66a5.66 5.66 0 0 0-.6-.03A5.63 5.63 0 1 0 15.5 15.3V8.99a7.3 7.3 0 0 0 4.27 1.37V7.27a4.25 4.25 0 0 1-3.17-1.45Z"/></svg>
         </div>
         <h3>TikTok</h3>
         <p>Videos and slideshows without the watermark, in original quality.</p>
-        <ul class="platform-tags"><li>No watermark</li><li>1080p</li><li>MP3</li></ul>
+        <ul class="platform-tags"><li>No watermark</li><li>1080p</li><li>HD</li></ul>
       </article>
 
       <article class="platform-card glass tilt reveal" data-reveal="zoom" data-delay="120" data-platform="instagram">
         <span class="platform-border" aria-hidden="true"></span>
         <div class="platform-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1.3" fill="currentColor" stroke="none"/></svg>
+          <!-- Strokes reference the #igGradient def at the top of this file. -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="url(#igGradient)" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1.3" fill="url(#igGradient)" stroke="none"/></svg>
         </div>
         <h3>Instagram</h3>
         <p>Reels, feed videos, IGTV and stories — saved in a couple of taps.</p>
@@ -332,11 +398,22 @@
       <article class="platform-card glass tilt reveal" data-reveal="zoom" data-delay="240" data-platform="facebook">
         <span class="platform-border" aria-hidden="true"></span>
         <div class="platform-icon">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 12.06C22 6.5 17.52 2 12 2S2 6.5 2 12.06c0 5 3.66 9.15 8.44 9.94v-7.03H7.9v-2.91h2.54V9.85c0-2.52 1.49-3.91 3.77-3.91 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.78-1.63 1.57v1.89h2.78l-.45 2.91h-2.33V22c4.78-.79 8.44-4.94 8.44-9.94Z"/></svg>
+          <svg viewBox="0 0 24 24" fill="#1877F2"><path d="M22 12.06C22 6.5 17.52 2 12 2S2 6.5 2 12.06c0 5 3.66 9.15 8.44 9.94v-7.03H7.9v-2.91h2.54V9.85c0-2.52 1.49-3.91 3.77-3.91 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.78-1.63 1.57v1.89h2.78l-.45 2.91h-2.33V22c4.78-.79 8.44-4.94 8.44-9.94Z"/></svg>
         </div>
         <h3>Facebook</h3>
-        <p>Public videos, Reels and watch clips in HD or compact SD.</p>
-        <ul class="platform-tags"><li>HD / SD</li><li>Reels</li><li>Watch</li></ul>
+        <p>Public videos, Reels and Watch clips in HD.</p>
+        <ul class="platform-tags"><li>HD</li><li>Reels</li><li>Watch</li></ul>
+      </article>
+
+      <article class="platform-card glass tilt reveal" data-reveal="zoom" data-delay="360" data-platform="youtube">
+        <span class="platform-border" aria-hidden="true"></span>
+        <div class="platform-icon">
+          <!-- Brand red #FF0000, not the site's #E50914 — it's their mark. -->
+          <svg viewBox="0 0 24 24"><path fill="#FF0000" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.3 31.3 0 0 0 0 12a31.3 31.3 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31.3 31.3 0 0 0 24 12a31.3 31.3 0 0 0-.5-5.8Z"/><path fill="#ffffff" d="M9.6 15.6 15.8 12 9.6 8.4Z"/></svg>
+        </div>
+        <h3>YouTube</h3>
+        <p>Videos, Shorts and live replays at full 1080p, with sound.</p>
+        <ul class="platform-tags"><li>1080p</li><li>Shorts</li><li>H.264</li></ul>
       </article>
     </div>
   </div>
@@ -346,7 +423,7 @@
 <section class="section" id="features">
   <div class="container">
     <header class="section-head reveal" data-reveal="up">
-      <span class="eyebrow">Why Video-Hub</span>
+      <span class="eyebrow">Why Vid VorTex</span>
       <h2 class="section-title">Everything you need, <span class="gradient-text">nothing you don't</span></h2>
       <p class="section-sub">Fast, free and friendly on every device you own.</p>
     </header>
@@ -480,7 +557,7 @@
           <span class="faq-icon" aria-hidden="true"></span>
         </button>
         <div class="faq-a"><div class="faq-a-inner">
-          <p>Open TikTok, tap <strong>Share → Copy link</strong>, then paste that link into the box at the top of this page and press Download. Choose HD, SD or MP3 from the panel that appears.</p>
+          <p>Open TikTok, tap <strong>Share → Copy link</strong>, then paste that link into the box at the top of this page and press Download. The panel that appears has a Download HD button — that's it.</p>
         </div></div>
       </div>
 
@@ -506,7 +583,7 @@
 
       <div class="faq-item glass reveal" data-reveal="up" data-delay="180">
         <button class="faq-q" aria-expanded="false">
-          <span>Is Video-Hub free?</span>
+          <span>Is Vid VorTex free?</span>
           <span class="faq-icon" aria-hidden="true"></span>
         </button>
         <div class="faq-a"><div class="faq-a-inner">
@@ -520,7 +597,7 @@
           <span class="faq-icon" aria-hidden="true"></span>
         </button>
         <div class="faq-a"><div class="faq-a-inner">
-          <p>Public Facebook videos, Reels and Watch clips are supported in both HD and SD. Copy the post link from the share menu and paste it above. Videos from private groups or profiles can't be fetched.</p>
+          <p>Public Facebook videos, Reels and Watch clips are supported in HD. Copy the post link from the share menu and paste it above. Videos from private groups or profiles can't be fetched.</p>
         </div></div>
       </div>
 
@@ -563,17 +640,16 @@
     <div class="footer-brand">
       <a href="#home" class="nav-logo">
         <svg class="logo-mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
-          <g class="lm-ring" fill="none" stroke-width="4.6" stroke-linecap="round">
-            <circle cx="24" cy="24" r="17" stroke="url(#vhBlue)" stroke-dasharray="30 76.81" />
-            <circle cx="24" cy="24" r="17" stroke="url(#vhGreen)" stroke-dasharray="30 76.81" stroke-dashoffset="-35.6" />
-            <circle cx="24" cy="24" r="17" stroke="url(#vhYellow)" stroke-dasharray="30 76.81" stroke-dashoffset="-71.2" />
-          </g>
-          <path class="lm-play" d="M20.6 16.9 32.4 24 20.6 31.1Z" fill="url(#vhPlay)"
-                stroke="url(#vhPlay)" stroke-width="2.6" stroke-linejoin="round" />
+          <!-- VD monogram: the V doubles as the D's stem, and the play glyph sits in
+             the D's counter. Hand-built flat SVG rather than the 3D artwork:
+             it stays crisp at 30px in the navbar and recolours from tokens. -->
+        <path class="lm-v" fill="url(#vhMark)" d="M4,6 L13,6 L21.5,30 L29.5,6 L37.5,6 L21.5,45.5 Z" />
+        <path class="lm-d" fill="url(#vhMark)" d="M29.5,6 C42,6 46.5,15 46,24.5 C45.4,35 35.5,42.5 21.5,45.5 C31,39.5 38.5,31.5 39,23.8 C39.4,15.8 36,11 29,11 Z" />
+        <path class="lm-play" fill="url(#vhMark)" d="M31.7,19.6 L37.6,24 L31.7,28.4 Z" />
         </svg>
-        <span class="nav-logo-text">Video-Hub</span>
+        <span class="nav-logo-text">Vid VorTex</span>
       </a>
-      <p class="footer-tagline">Download TikTok, Instagram &amp; Facebook videos instantly. Free forever, no login required.</p>
+      <p class="footer-tagline">Download TikTok, Instagram, Facebook &amp; YouTube videos instantly. Free forever, no login required.</p>
     </div>
 
     <nav class="footer-links" aria-label="Footer">
@@ -583,7 +659,7 @@
       <a href="https://github.com" target="_blank" rel="noopener noreferrer">GitHub</a>
     </nav>
   </div>
-  <p class="copyright">© <span id="year">2026</span> Video-Hub. Built with HTML, CSS &amp; vanilla JavaScript.</p>
+  <p class="copyright">© <span id="year">2026</span> Vid VorTex. Built with HTML, CSS &amp; vanilla JavaScript.</p>
 </footer>
 
 <!-- ============ TOAST / WARNING ============ -->

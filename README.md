@@ -1,4 +1,4 @@
-# 🎬 Video-Hub
+# 🎬 Vid VorTex
 
 A video downloader for TikTok, Instagram and Facebook. Paste a link, pick a
 quality, save the file.

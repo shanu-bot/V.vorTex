@@ -2,7 +2,7 @@
   "name": "video-hub-api",
   "version": "1.0.0",
   "private": true,
-  "description": "Resolver API for Video-Hub. Turns a TikTok/Instagram/Facebook link into a real downloadable stream.",
+  "description": "Resolver API for Vid VorTex. Turns a TikTok/Instagram/Facebook link into a real downloadable stream.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
