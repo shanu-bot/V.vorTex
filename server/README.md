@@ -304,6 +304,46 @@ download returned `200` with zero bytes.
 
 The classification for this failure is `format_unavailable`.
 
+### "spawn gallery-dl ENOENT"
+
+The command name is right — `gallery-dl` is the real binary. The problem is
+that it genuinely isn't installed.
+
+**It cannot be replaced by yt-dlp.** yt-dlp is video-only; an Instagram image
+post makes it exit with *"There is no video in this post"*, which is the string
+`NO_VIDEO_RE` matches on to hand over to the photo route. Dropping gallery-dl
+means dropping photo and carousel support entirely, not moving it elsewhere.
+
+**It also can't be installed the way yt-dlp and ffmpeg are.** Those publish
+static binaries; gallery-dl publishes none — every release from v1.32.3 to
+v1.32.8 carries zero assets, and `/releases/download/v1.32.6/gallery-dl.bin` is
+a 404. It's a Python package and has to be installed as one.
+
+So `scripts/install-tools.js` now installs it into a venv, mirroring what the
+Dockerfile has always done. A venv rather than `pip install --user` because
+Debian and Ubuntu mark the system Python externally-managed (PEP 668), which
+makes a bare pip refuse to run. `bin/gallery-dl` is symlinked to the venv entry
+point — a copy would break, since pip generates a script whose shebang points
+back into the venv.
+
+**Failure there is never fatal.** No Python on the host means no gallery-dl,
+which means no photo posts — and video downloads on all four platforms are
+completely unaffected, so the deploy should not fail over it. The installer
+warns and continues.
+
+The server probes gallery-dl once at boot and reports it:
+
+```
+[gallery-dl] 1.32.6 at /opt/render/project/src/server/bin/gallery-dl - photo posts supported
+[gallery-dl] NOT AVAILABLE (ENOENT for "gallery-dl"). Instagram photo and carousel
+             posts will fail with a clear error; video downloads on all platforms
+             are unaffected. Fix: redeploy so postinstall installs it, or set GALLERYDL_PATH.
+```
+
+`GET /api/health` carries the same under `galleryDl`. When it's missing, photo
+requests return `code: "gallerydl_missing"` with a sentence saying so, instead
+of spawning a binary already known to be absent and surfacing a raw `ENOENT`.
+
 ### Instagram post shape
 
 A `/p/` link can be one photo, one video, or a carousel mixing both, and until

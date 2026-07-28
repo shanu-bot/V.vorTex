@@ -68,6 +68,55 @@ const FFMPEG = resolveTool("FFMPEG_PATH", "ffmpeg");
 const FFPROBE = resolveTool("FFPROBE_PATH", "ffprobe");
 const GALLERYDL = resolveTool("GALLERYDL_PATH", "gallery-dl");
 
+/* --------------------------------------------------------------------------
+   Photo support is optional, and says so.
+
+   gallery-dl handles Instagram photo and carousel posts. yt-dlp cannot: it is
+   video-only, and an image post makes it exit with "There is no video in this
+   post" -- which is exactly what NO_VIDEO_RE further down is matching on. So
+   this is not a tool that can be swapped for the other.
+
+   It is also the only tool here without a static binary to download, so a
+   host without Python simply won't have it. Rather than let that surface as
+   "spawn gallery-dl ENOENT" on the first photo post, it is probed once at boot
+   and reported: video downloads are entirely unaffected, and the failure
+   should read as "photos unavailable" rather than as a crash.
+   -------------------------------------------------------------------------- */
+
+const GALLERYDL_STATUS = (() => {
+  const probe = spawnSync(GALLERYDL, ["--version"], { encoding: "utf8", timeout: 20_000 });
+  if (probe.error || probe.status !== 0) {
+    return {
+      available: false,
+      path: GALLERYDL,
+      version: null,
+      reason: probe.error ? probe.error.code : `exit ${probe.status}`
+    };
+  }
+  return { available: true, path: GALLERYDL, version: (probe.stdout || "").trim(), reason: null };
+})();
+
+if (GALLERYDL_STATUS.available) {
+  console.log(`[gallery-dl] ${GALLERYDL_STATUS.version} at ${GALLERYDL_STATUS.path} - photo posts supported`);
+} else {
+  console.warn(
+    `[gallery-dl] NOT AVAILABLE (${GALLERYDL_STATUS.reason} for "${GALLERYDL_STATUS.path}"). ` +
+    "Instagram photo and carousel posts will fail with a clear error; " +
+    "video downloads on all platforms are unaffected. " +
+    "Fix: redeploy so postinstall installs it, or set GALLERYDL_PATH."
+  );
+}
+
+/** One sentence a visitor and an operator can both act on. */
+const NO_GALLERYDL_ERROR = () => ({
+  error:
+    "Photo posts need gallery-dl, which is not installed on this server " +
+    `(${GALLERYDL_STATUS.reason} for "${GALLERYDL_STATUS.path}"). ` +
+    "Video downloads are unaffected.",
+  code: "gallerydl_missing",
+  detail: null
+});
+
 /**
  * Codec of a file's first video stream.
  *
@@ -1127,6 +1176,10 @@ function classifyPostType(items) {
  * before this could be asked.
  */
 async function galleryItems(url, timeoutMs = 25_000) {
+  // Don't spawn a binary that was already established to be absent -- that is
+  // where the raw ENOENT came from, once per attempt, saying nothing useful.
+  if (!GALLERYDL_STATUS.available) return [];
+
   try {
     const raw = await galleryDump(url, timeoutMs);
     const items = parseGalleryItems(raw).filter((it) => isAllowedMedia(it.url));
@@ -1232,6 +1285,12 @@ function galleryDump(url, timeoutMs = 25_000) {
  * when it wants types and thumbnails, and falls back to this.
  */
 function galleryUrls(url, timeoutMs = 25_000) {
+  if (!GALLERYDL_STATUS.available) {
+    const e = new Error(NO_GALLERYDL_ERROR().error);
+    e.code = "gallerydl_missing";
+    e.detail = null;
+    return Promise.reject(e);
+  }
   return new Promise((resolve, reject) => {
     // Same disposable copy the yt-dlp paths get: gallery-dl updates the jar it
     // is handed by default, so pointing it at the master has the same race.
@@ -1468,7 +1527,10 @@ app.use(cors({
 app.get("/api/health", (_req, res) => res.json({
   ok: true,
   cookies: cookieSummary(),
-  jsRuntime: JS_RUNTIME_STATUS
+  jsRuntime: JS_RUNTIME_STATUS,
+  // Photo/carousel support, separately from video: it has its own binary and
+  // its own way of being absent.
+  galleryDl: GALLERYDL_STATUS
 }));
 
 /* --------------------------------------------------------------------------
@@ -1490,7 +1552,15 @@ app.get("/api/info", rateLimit, async (req, res) => {
      platform that needs both. Nothing else changes shape: TikTok, Facebook and
      YouTube never enter this branch. */
   const wantsItems = platform === "instagram" && IG_POST_RE.test(String(url));
-  const itemsPromise = wantsItems ? galleryItems(url) : Promise.resolve([]);
+
+  /* .catch() even though galleryItems() already swallows everything: this
+     promise is started before the yt-dlp await and is not awaited on every
+     path out of the handler, and an unhandled rejection terminates the process
+     on modern Node. A belt on top of the braces costs nothing and the failure
+     mode it prevents is the whole server going down. */
+  const itemsPromise = wantsItems
+    ? galleryItems(url).catch(() => [])
+    : Promise.resolve([]);
 
   try {
     let info;

@@ -204,6 +204,91 @@ async function installFfmpeg() {
 }
 
 /* --------------------------------------------------------------------------
+   gallery-dl
+
+   This is the one that caused "spawn gallery-dl ENOENT": the Dockerfile
+   installs it, this script did not, so a native-runtime deploy had yt-dlp and
+   ffmpeg and no gallery-dl at all.
+
+   It cannot be installed the way the other two are. yt-dlp and ffmpeg publish
+   static binaries; gallery-dl publishes none -- checked every release from
+   v1.32.3 to v1.32.8 and all of them carry zero assets, and
+   /releases/download/v1.32.6/gallery-dl.bin is a 404. It is a Python package
+   and has to be installed as one.
+
+   So: a venv, exactly as the Dockerfile does it. A venv rather than a plain
+   `pip install --user` because Debian and Ubuntu mark the system Python
+   externally-managed (PEP 668), which makes a bare pip refuse to run.
+
+   Failure here is deliberately NOT fatal. gallery-dl serves Instagram photo
+   and carousel posts; every video download on all four platforms goes through
+   yt-dlp and is unaffected. Losing photos is worth reporting loudly and worth
+   nobody's deploy failing over.
+   -------------------------------------------------------------------------- */
+
+const GALLERYDL_VERSION = "1.32.6"; // matches the Dockerfile's pin
+
+function pythonBinary() {
+  for (const candidate of ["python3", "python"]) {
+    const r = spawnSync(candidate, ["--version"], { stdio: "ignore", timeout: 20_000 });
+    if (!r.error && r.status === 0) return candidate;
+  }
+  return null;
+}
+
+async function installGalleryDl() {
+  const target = path.join(BIN_DIR, "gallery-dl");
+
+  if (process.env.GALLERYDL_PATH) {
+    log(`gallery-dl provided by GALLERYDL_PATH (${process.env.GALLERYDL_PATH}) — skipping.`);
+    return;
+  }
+  if (fs.existsSync(target)) {
+    log("gallery-dl already in bin/ — skipping.");
+    return;
+  }
+  if (onPath("gallery-dl")) {
+    log("gallery-dl already on PATH (container build?) — skipping.");
+    return;
+  }
+
+  const python = pythonBinary();
+  if (!python) {
+    console.warn(
+      "[install-tools] WARNING: no python3 on this host, so gallery-dl cannot be installed. " +
+      "Instagram photo and carousel posts will not work. Video downloads are unaffected."
+    );
+    return;
+  }
+
+  const venv = path.join(BIN_DIR, "gallery-dl-venv");
+  try {
+    log(`creating venv with ${python}...`);
+    run(python, ["-m", "venv", venv]);
+
+    const pip = path.join(venv, "bin", "pip");
+    log(`installing gallery-dl==${GALLERYDL_VERSION}...`);
+    run(pip, ["install", "--no-cache-dir", "--quiet", `gallery-dl==${GALLERYDL_VERSION}`]);
+
+    /* A symlink rather than a copy: the entry point is a generated script whose
+       shebang points back into the venv, so it only works from where pip put
+       it. server.js looks for bin/gallery-dl and follows the link. */
+    const real = path.join(venv, "bin", "gallery-dl");
+    try { fs.unlinkSync(target); } catch { /* nothing to remove */ }
+    fs.symlinkSync(real, target);
+
+    const version = run(target, ["--version"]).trim();
+    log(`gallery-dl ${version} installed to bin/`);
+  } catch (err) {
+    console.warn(
+      `[install-tools] WARNING: gallery-dl install failed (${err.message}). ` +
+      "Instagram photo and carousel posts will not work. Video downloads are unaffected."
+    );
+    try { fs.rmSync(venv, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+
+/* --------------------------------------------------------------------------
    Go
    -------------------------------------------------------------------------- */
 
@@ -214,12 +299,17 @@ async function main() {
   fs.mkdirSync(BIN_DIR, { recursive: true });
   await installYtdlp();
   await installFfmpeg();
+  // Last, and never fatal: the other two are what make downloads work at all.
+  await installGalleryDl();
   log("done.");
 }
 
 // Exported so the download and extract paths can be exercised from a test
 // harness on a machine that isn't the Linux host they're written for.
-module.exports = { download, installYtdlp, installFfmpeg, skipReason, BIN_DIR, YTDLP_VERSION };
+module.exports = {
+  download, installYtdlp, installFfmpeg, installGalleryDl, pythonBinary,
+  skipReason, BIN_DIR, YTDLP_VERSION, GALLERYDL_VERSION
+};
 
 if (require.main === module) {
   main().catch((err) => {
