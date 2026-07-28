@@ -430,9 +430,24 @@ function cookieSession() {
     fs.copyFileSync(COOKIE_FILE, copy);
     fs.chmodSync(copy, 0o600);
 
+    /* Size at hand-over, so the copy can be checked afterwards -- see the note
+       on cookiesProvenRead below for why that is the only real proof. */
+    const sizeBefore = (() => {
+      try { return fs.statSync(copy).size; } catch { return 0; }
+    })();
+
+    let finished = false;
     return {
       args: ["--cookies", copy],
+      path: copy,
       done: () => {
+        if (!finished) {
+          finished = true;
+          try {
+            const sizeAfter = fs.statSync(copy).size;
+            if (sizeAfter !== sizeBefore) noteCookiesRead(sizeBefore, sizeAfter);
+          } catch { /* already gone, or never written */ }
+        }
         try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* already gone */ }
       }
     };
@@ -444,6 +459,225 @@ function cookieSession() {
     try { if (dir) fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
     return NO_COOKIES;
   }
+}
+
+/* --------------------------------------------------------------------------
+   Proving yt-dlp actually read the jar
+
+   `--verbose` does not say. Checked against yt-dlp 2026.07.04: the only thing
+   verbose output has to say about cookies is the echoed command line --
+   "[debug] Command-line config: [... '--cookies', '<path>' ...]". That proves
+   the flag was passed, which we already knew, and says nothing about whether
+   the file was opened, parsed, or used.
+
+   What does prove it is yt-dlp's own behaviour: it writes the jar back when it
+   finishes, merging in whatever the site set during the fetch. Measured, a
+   YouTube request turns an 89-byte file into a 972-byte one, and it does that
+   even under --simulate. So if the disposable copy changed size, yt-dlp read
+   it. That is a behavioural fact rather than an inference from a log line.
+
+   Reported once per process. It answers a yes/no question, and the answer does
+   not change between requests.
+   -------------------------------------------------------------------------- */
+
+let cookiesProvenRead = false;
+
+function noteCookiesRead(before, after) {
+  if (cookiesProvenRead) return;
+  cookiesProvenRead = true;
+  console.log(
+    `[cookies] VERIFIED: yt-dlp read the jar - it rewrote the copy ` +
+    `(${before} -> ${after} bytes). Source: ${COOKIE_STATUS.source}`
+  );
+}
+
+/* --------------------------------------------------------------------------
+   Pre-flight, and optional verbose passthrough.
+
+   YTDLP_VERBOSE=1 turns on the block the operator asked for before every run:
+   whether the jar exists, how big it is, the exact command, and the head of
+   yt-dlp's verbose output. Off by default because --verbose is ~40 lines per
+   invocation and there are up to two invocations per download.
+
+   Never prints cookie contents -- only the path, the size, and the flags.
+   -------------------------------------------------------------------------- */
+
+const YTDLP_VERBOSE = /^(1|true|yes)$/i.test(process.env.YTDLP_VERBOSE || "");
+const VERBOSE_HEAD_LINES = 15;
+
+/* --------------------------------------------------------------------------
+   JavaScript runtime
+
+   YouTube now hands out a JS challenge that yt-dlp has to execute, and without
+   a runtime to execute it in you get "No supported JavaScript runtime could be
+   found" followed by the bot check -- which reads like a cookie problem and
+   is not one.
+
+   The subtlety is that yt-dlp *supports* node but does not *enable* it:
+   `--js-runtimes` lists deno, node, quickjs and bun, and only deno is on by
+   default. So a box with node installed and no deno reports
+   "node (unavailable)", which means "not enabled", not "not found". Render's
+   Node runtime is exactly that box.
+
+   The path comes from process.execPath rather than PATH: this server is a node
+   process, so that is a node binary that definitely exists and definitely
+   works, in the container and on the native runtime alike.
+
+   Node is *added*, not swapped in. Deno outranks it when present, so a host
+   that has both keeps yt-dlp's preferred runtime.
+
+   YTDLP_JS_RUNTIME=off disables the flag; anything else is taken as a runtime
+   spec passed through verbatim (e.g. "deno" or "node:/usr/local/bin/node").
+   -------------------------------------------------------------------------- */
+
+const JS_RUNTIME = (() => {
+  const setting = (process.env.YTDLP_JS_RUNTIME || "").trim();
+  if (/^(off|none|0|false|no)$/i.test(setting)) return null;
+  return setting || `node:${process.execPath}`;
+})();
+
+/* Asked and answered at boot, without touching the network.
+   `yt-dlp --verbose` with no URL prints its startup banner and exits with a
+   usage error, and that banner contains the line that settles this:
+
+     [debug] JS runtimes: deno-2.9.2, node-24.18.0
+     [debug] JS runtimes: none
+
+   Running it with the flags this server intends to use therefore reports
+   exactly what yt-dlp will have available at download time -- verified rather
+   than assumed, which matters because "node is installed" and "yt-dlp can use
+   node" turned out to be different statements.
+
+   It also covers the older-build case for free: a yt-dlp that predates the
+   option rejects it here, at boot, instead of on every download. */
+/** What the boot probe found, so /api/health can report it too. */
+const JS_RUNTIME_STATUS = { requested: JS_RUNTIME, available: null, enabled: false };
+
+const JS_RUNTIME_ARGS = (() => {
+  if (!JS_RUNTIME) {
+    console.log("[jsruntime] disabled by YTDLP_JS_RUNTIME");
+    JS_RUNTIME_STATUS.available = "disabled";
+    return [];
+  }
+
+  const want = ["--js-runtimes", JS_RUNTIME];
+  const probe = spawnSync(YTDLP, ["--verbose", ...want], { encoding: "utf8", timeout: 30_000 });
+  const out = `${probe.stdout || ""}${probe.stderr || ""}`;
+
+  if (probe.error) {
+    console.warn(`[jsruntime] could not probe yt-dlp (${probe.error.code}); not passing --js-runtimes`);
+    JS_RUNTIME_STATUS.available = `probe failed: ${probe.error.code}`;
+    return [];
+  }
+  if (/no such option|unrecognized arguments?|Unknown option/i.test(out)) {
+    console.warn("[jsruntime] this yt-dlp build has no --js-runtimes option; not passing it");
+    JS_RUNTIME_STATUS.available = "option not supported by this yt-dlp build";
+    return [];
+  }
+
+  const found = (out.match(/JS runtimes:\s*(.+)/) || [])[1]?.trim();
+  JS_RUNTIME_STATUS.available = found || "unknown";
+  JS_RUNTIME_STATUS.enabled = Boolean(found) && !/^none$/i.test(found);
+  if (!found || /^none$/i.test(found)) {
+    console.error(
+      `[jsruntime] yt-dlp reports NO usable JS runtime with "${JS_RUNTIME}". ` +
+      "YouTube's JS challenge will fail and downloads will look like bot checks. " +
+      `(node binary this process is running from: ${process.execPath})`
+    );
+  } else {
+    console.log(`[jsruntime] enabling "${JS_RUNTIME}" -> yt-dlp reports: ${found}`);
+  }
+
+  return want;
+})();
+
+/* The JS-challenge confirmation is a yes/no about this process, so it is
+   reported once rather than on every request. */
+let jsRuntimeConfirmed = false;
+
+/** Indirection so the verbose/JS wrappers stay separable from the raw spawn. */
+const spawnYtdlpProcess = (args) => spawn(YTDLP, args);
+
+function spawnYtdlp(args, label) {
+  /* Prepended here rather than at each call site: one choke point means every
+     invocation gets it -- metadata, merge, stream and mp3 alike -- and none of
+     the format or routing code has to know it exists. */
+  const final = [...(YTDLP_VERBOSE ? ["--verbose"] : []), ...JS_RUNTIME_ARGS, ...args];
+
+  if (YTDLP_VERBOSE) {
+    const i = final.indexOf("--cookies");
+    const jarPath = i >= 0 ? final[i + 1] : null;
+    let size = null;
+    if (COOKIE_FILE) {
+      try { size = fs.statSync(COOKIE_FILE).size; } catch { size = null; }
+    }
+
+    console.log(`[preflight:${label}] cookies file exists: ${COOKIE_FILE ? "yes" : "no"}`);
+    console.log(
+      `[preflight:${label}] file size: ` +
+      (size === null ? "n/a" : `${size} bytes`) +
+      (COOKIE_STATUS.source ? ` (from ${COOKIE_STATUS.source})` : "")
+    );
+    console.log(`[preflight:${label}] --cookies passed to yt-dlp: ${jarPath ? `yes -> ${jarPath}` : "NO"}`);
+    console.log(`[preflight:${label}] command: ${YTDLP} ${final.join(" ")}`);
+  }
+
+  const child = spawnYtdlpProcess(final);
+
+  /* Confirm the runtime was not merely enabled but actually picked, once per
+     process. yt-dlp announces it plainly -- "[jsc:node] Solving JS challenges
+     using node" -- and that line is the difference between "we passed a flag"
+     and "the challenge got solved". Cheap to watch for: a regex on stderr that
+     stops matching after the first hit. */
+  if (!jsRuntimeConfirmed) {
+    const watch = (d) => {
+      if (jsRuntimeConfirmed) return;
+      const m = String(d).match(/\[jsc:(\w+)\] Solving JS challenges using (\S+)/);
+      if (m) {
+        jsRuntimeConfirmed = true;
+        console.log(`[jsruntime] VERIFIED: yt-dlp solved a JS challenge using "${m[2]}"`);
+        child.stderr.off("data", watch);
+        return;
+      }
+      if (/No supported JavaScript runtime/i.test(String(d))) {
+        jsRuntimeConfirmed = true;
+        console.error(
+          "[jsruntime] yt-dlp reports NO supported JavaScript runtime. " +
+          `Passing: ${JS_RUNTIME_ARGS.join(" ") || "(nothing)"}`
+        );
+        child.stderr.off("data", watch);
+      }
+    };
+    child.stderr.on("data", watch);
+  }
+
+  if (YTDLP_VERBOSE) {
+    let head = "";
+    let printed = false;
+    child.stderr.on("data", (d) => {
+      if (printed) return;
+      head += d;
+      const lines = head.split("\n");
+      if (lines.length > VERBOSE_HEAD_LINES) {
+        printed = true;
+        console.log(
+          `[verbose:${label}] first ${VERBOSE_HEAD_LINES} lines:\n` +
+          lines.slice(0, VERBOSE_HEAD_LINES).map((l) => `  ${l}`).join("\n")
+        );
+      }
+    });
+    // Short runs may never reach the line count; flush whatever arrived.
+    child.on("close", () => {
+      if (printed || !head.trim()) return;
+      printed = true;
+      console.log(
+        `[verbose:${label}] output was shorter than ${VERBOSE_HEAD_LINES} lines:\n` +
+        head.split("\n").map((l) => `  ${l}`).join("\n")
+      );
+    });
+  }
+
+  return child;
 }
 
 /* --------------------------------------------------------------------------
@@ -721,7 +955,7 @@ function ytdlpJsonOnce(url, timeoutMs = 25_000, selector = null) {
     args.push(...jar.args, url);
 
     // Args as an array + no shell: the URL can never be interpreted as a command.
-    const child = spawn(YTDLP, args);
+    const child = spawnYtdlp(args, "metadata");
 
     let out = "";
     let err = "";
@@ -1043,7 +1277,11 @@ app.use(cors({
 /* Health carries the cookie state so "is the Secret File actually being read?"
    can be answered without triggering a download and reading the logs. Counts
    and paths only -- never a cookie name or value. */
-app.get("/api/health", (_req, res) => res.json({ ok: true, cookies: cookieSummary() }));
+app.get("/api/health", (_req, res) => res.json({
+  ok: true,
+  cookies: cookieSummary(),
+  jsRuntime: JS_RUNTIME_STATUS
+}));
 
 /* --------------------------------------------------------------------------
    GET /api/info -- metadata for the result panel
@@ -1183,7 +1421,7 @@ async function streamMerged(req, res, url, format, platform, allowRetry = true) 
   if (FFMPEG_LOCATION) args.push("--ffmpeg-location", FFMPEG_LOCATION);
   args.push(...jar.args, "-o", template, url);
 
-  const dl = spawn(YTDLP, args);
+  const dl = spawnYtdlp(args, `${platform}:merge`);
 
   let err = "";
   dl.stderr.on("data", (d) => { err += d; });
@@ -1371,7 +1609,7 @@ function streamProgressive(req, res, url, plan, title, platform, selector) {
   if (FORMAT_SORT) args.push("-S", FORMAT_SORT);
   args.push(...jar.args, "-o", "-", url);
 
-  const dl = spawn(YTDLP, args);
+  const dl = spawnYtdlp(args, `${platform}:stream`);
   let failed = "";
   dl.stderr.on("data", (d) => { failed += d; });
 
@@ -1632,14 +1870,14 @@ app.get("/api/download", rateLimit, async (req, res) => {
      signed in fails the same way the MP4 would without it. */
   const jar = cookieSession();
 
-  const dl = spawn(YTDLP, [
+  const dl = spawnYtdlp([
     "-f", FORMATS.mp3,
     "--no-playlist",
     "--socket-timeout", "15",
     ...jar.args,
     "-o", "-",           // stream to stdout
     url
-  ]);
+  ], `${platform}:mp3`);
 
   // yt-dlp's own --extract-audio can't post-process to stdout, so pipe its raw
   // audio stream through ffmpeg and transcode on the fly. Audio is one stream,

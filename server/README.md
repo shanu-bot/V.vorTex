@@ -132,6 +132,43 @@ past it.
 2. `/etc/secrets/cookies.txt` — where Render mounts a Secret File
 3. `server/cookies.txt` — local development
 
+### "No supported JavaScript runtime could be found"
+
+YouTube hands out a JS challenge that yt-dlp has to execute. Without a runtime
+it can't, and what you see is that message followed by a bot check — which
+reads like a cookie problem and isn't one.
+
+The catch is that yt-dlp *supports* Node but does not *enable* it. `--js-runtimes`
+lists deno, node, quickjs and bun, and **only deno is enabled by default**, so a
+box with Node and no Deno reports `node (unavailable)` — meaning "not enabled",
+not "not found". Render's Node runtime is exactly that box.
+
+The server now passes `--js-runtimes node:<process.execPath>` on every yt-dlp
+invocation. The path comes from `process.execPath` rather than `PATH` because
+this server *is* a Node process, so that binary certainly exists and certainly
+works — in the container and on the native runtime alike. Node is **added**, not
+swapped in: Deno still outranks it where present.
+
+Verified at boot without touching the network. `yt-dlp --verbose` with no URL
+prints its banner and exits with a usage error, and the banner carries the line
+that settles it:
+
+```
+[debug] JS runtimes: deno-2.9.2, node-24.18.0
+[debug] JS runtimes: none
+```
+
+Running that probe with the flags the server intends to use reports exactly what
+yt-dlp will have at download time. The result is logged and exposed on
+`/api/health` as `jsRuntime`:
+
+```json
+"jsRuntime": { "requested": "node:/usr/local/bin/node", "available": "node-20.11.1", "enabled": true }
+```
+
+`available: "none"` is the failure case and is logged as an error. `YTDLP_JS_RUNTIME=off`
+disables the flag; any other value is passed through verbatim (e.g. `deno`).
+
 #### Verifying the jar is actually being read
 
 `GET /api/health` reports it, so you don't have to trigger a download and read
@@ -216,6 +253,8 @@ Cookies are never read from the master jar directly: yt-dlp and gallery-dl both
 also means the read-only Render mount is never written to.
 | `FFPROBE_PATH` | `server/bin/ffprobe`, else PATH | Used to confirm the finished file actually has a video track. If it can't run, the check is skipped rather than failing the download. |
 | `RAW_ERRORS` | *(off)* | Set to `1` to stop redacting filesystem paths and URL query strings out of error responses. The server log is unredacted either way. |
+| `YTDLP_JS_RUNTIME` | `node:<process.execPath>` | JS runtime for YouTube's challenge. `off` disables the flag; any other value is passed to `--js-runtimes` verbatim. See below. |
+| `YTDLP_VERBOSE` | *(off)* | Set to `1` to add `--verbose` to every yt-dlp run and log a pre-flight block: whether the jar exists, its size, whether `--cookies` was passed, the full command, and the first 15 lines of verbose output. Noisy — for debugging, not production. Never prints cookie contents. |
 | `MAX_QUALITY` | *(off)* | Set to `1` to drop the H.264 preference — highest resolution wins, codec be damned. **This is the setting that produces AV1.** Leave it off unless you know every player you care about handles AV1/VP9; see below. |
 
 ### "Requested format is not available"
