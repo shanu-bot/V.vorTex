@@ -71,31 +71,102 @@ const GALLERYDL = resolveTool("GALLERYDL_PATH", "gallery-dl");
 const FFMPEG_LOCATION = FFMPEG.includes(path.sep) ? path.dirname(FFMPEG) : null;
 
 /* --------------------------------------------------------------------------
-   IG_COOKIES -- optional, and the difference between the photo route working
+   Cookies -- optional, and increasingly the difference between this working
    and not.
 
-   Instagram serves no photo media to logged-out clients: the post page returns
-   200 but carries no image URL, because the media is fetched client-side from
-   a login-walled API. gallery-dl hits that same API, so without a session it
-   gets the same nothing.
+   Two env vars, both holding the contents of a Netscape cookies.txt exported
+   from a logged-in session:
 
-   Set IG_COOKIES to the contents of a Netscape cookies.txt exported from a
-   logged-in session and the photo route starts working. Leave it unset and
-   photo posts fail with a clear message -- video is unaffected either way.
+     YTDLP_COOKIES -- any site yt-dlp touches. This is the one that matters for
+       video. Platforms serve datacenter IPs a bot check rather than the video
+       (YouTube's "Sign in to confirm you're not a bot" is the one you'll hit
+       first), and a session is what gets past it.
+     IG_COOKIES    -- Instagram, kept under its old name because it predates
+       the general jar and is already set on deployed services.
 
-   Use a burner account. This fires from a datacenter IP, which Instagram
-   treats as an automation signal, and the account can be banned for it.
+   Both are merged into one file. That's safe because a cookies.txt is
+   domain-scoped and yt-dlp only sends the entries matching the host it's
+   fetching -- an Instagram session in the jar is simply not offered to
+   YouTube. So the split is about where you pasted it, not about routing.
+
+   Env vars usually can't hold real newlines, so escaped ones are accepted too.
+   0600: the container runs as `node`, but don't leave a session readable.
+
+   Use burner accounts. This fires from a datacenter IP, which every one of
+   these platforms treats as an automation signal, and accounts get banned for
+   it. Sessions also expire -- expect to re-paste every few weeks.
    -------------------------------------------------------------------------- */
 
+/** Netscape jars must open with this magic line or the parser rejects them. */
+const COOKIE_HEADER = "# Netscape HTTP Cookie File";
+const COOKIE_HEADER_RE = /^#\s*(?:Netscape|HTTP)\s+.*Cookie File/i;
+
 const COOKIE_FILE = (() => {
-  const raw = process.env.IG_COOKIES || "";
-  if (!raw.trim()) return null;
-  const file = path.join(os.tmpdir(), "ig-cookies.txt");
-  // Env vars usually can't hold real newlines, so accept escaped ones too.
-  // 0600: the container runs as `node`, but don't leave a session readable.
-  fs.writeFileSync(file, raw.replace(/\\n/g, "\n").trim() + "\n", { mode: 0o600 });
+  const blobs = [process.env.YTDLP_COOKIES, process.env.IG_COOKIES]
+    .map((s) => (s || "").replace(/\\n/g, "\n").trim())
+    .filter(Boolean);
+
+  if (!blobs.length) return null;
+
+  // Each blob carries its own magic line; the merged file needs exactly one,
+  // at the top. Everything else -- comments included -- passes through, since
+  // the parser skips them anyway.
+  const body = blobs
+    .join("\n")
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .filter((l) => !COOKIE_HEADER_RE.test(l))
+    .join("\n")
+    .trim();
+
+  const file = path.join(os.tmpdir(), "vv-cookies.txt");
+  fs.writeFileSync(file, `${COOKIE_HEADER}\n${body}\n`, { mode: 0o600 });
   return file;
 })();
+
+/* --------------------------------------------------------------------------
+   Every run gets its own copy of the jar.
+
+   yt-dlp does not just read the file it's handed -- it writes the whole jar
+   back when it finishes, merging in whatever the site set during the fetch. A
+   single request against YouTube turns an 89-byte file into a 972-byte one.
+   gallery-dl does the same by default.
+
+   Sharing one file across concurrent downloads therefore means two processes
+   rewriting it at once, and the loser's write can leave a truncated jar --
+   which takes out the configured session until the service restarts. So each
+   invocation gets a disposable copy and the master is only ever read.
+
+   Returns spawn args plus the cleanup to run once the process is done.
+   -------------------------------------------------------------------------- */
+
+const NO_COOKIES = { args: [], done: () => {} };
+
+function cookieSession() {
+  if (!COOKIE_FILE) return NO_COOKIES;
+
+  let dir;
+  try {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "vv-ck-"));
+    const copy = path.join(dir, "cookies.txt");
+    fs.copyFileSync(COOKIE_FILE, copy);
+    fs.chmodSync(copy, 0o600);
+
+    return {
+      args: ["--cookies", copy],
+      done: () => {
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* already gone */ }
+      }
+    };
+  } catch (err) {
+    // Degrade to an anonymous fetch rather than failing the request outright:
+    // plenty of links need no session at all. Log it, because the ones that do
+    // will fail further down with a much less obvious message.
+    console.error(`[cookies] could not stage a jar copy: ${err.message}`);
+    try { if (dir) fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    return NO_COOKIES;
+  }
+}
 
 /* --------------------------------------------------------------------------
    SECURITY: host allowlist
@@ -249,12 +320,18 @@ const FORMATS = {
 /** Run yt-dlp and buffer stdout. Used for metadata only, never for the video. */
 function ytdlpJson(url, timeoutMs = 25_000) {
   return new Promise((resolve, reject) => {
+    // Metadata is login-walled on exactly the same posts the media is, so this
+    // needs the session as much as the download does -- without it /api/info
+    // fails first and the download is never even attempted.
+    const jar = cookieSession();
+
     // Args as an array + no shell: the URL can never be interpreted as a command.
     const child = spawn(YTDLP, [
       "-J",
       "--no-playlist",
       "--no-warnings",
       "--socket-timeout", "15",
+      ...jar.args,
       url
     ]);
 
@@ -262,6 +339,7 @@ function ytdlpJson(url, timeoutMs = 25_000) {
     let err = "";
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
+      jar.done();
       reject(new Error("Timed out reading that link."));
     }, timeoutMs);
 
@@ -269,10 +347,12 @@ function ytdlpJson(url, timeoutMs = 25_000) {
     child.stderr.on("data", (d) => { err += d; });
     child.on("error", () => {
       clearTimeout(timer);
+      jar.done();
       reject(new Error("yt-dlp is not installed on the server."));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      jar.done();
       if (code !== 0) {
         const e = new Error(friendlyError(err));
         // Keep the raw text: /api/info reads it to tell "this is a photo post"
@@ -326,8 +406,11 @@ function isAllowedMedia(raw) {
  */
 function galleryUrls(url, timeoutMs = 25_000) {
   return new Promise((resolve, reject) => {
-    const args = ["-g", "--quiet"];
-    if (COOKIE_FILE) args.push("--cookies", COOKIE_FILE);
+    // Same disposable copy the yt-dlp paths get: gallery-dl updates the jar it
+    // is handed by default, so pointing it at the master has the same race.
+    const jar = cookieSession();
+
+    const args = ["-g", "--quiet", ...jar.args];
     args.push(url); // array + no shell: never interpreted as a command
 
     const child = spawn(GALLERYDL, args);
@@ -336,6 +419,7 @@ function galleryUrls(url, timeoutMs = 25_000) {
     let err = "";
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
+      jar.done();
       reject(new Error("Timed out reading that post."));
     }, timeoutMs);
 
@@ -343,10 +427,12 @@ function galleryUrls(url, timeoutMs = 25_000) {
     child.stderr.on("data", (d) => { err += d; });
     child.on("error", () => {
       clearTimeout(timer);
+      jar.done();
       reject(new Error("gallery-dl is not installed on the server."));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      jar.done();
       const urls = out.split("\n").map((s) => s.trim()).filter(Boolean);
 
       if (code !== 0 || !urls.length) return reject(new Error(photoError(err)));
@@ -518,11 +604,17 @@ async function streamMerged(req, res, url, format, platform) {
     return res.status(500).json({ error: "Server has no writable temp space." });
   }
 
+  /* The jar gets its own directory, deliberately not this one: the merged file
+     is found by reading `dir` back and taking what's there, so anything else
+     dropped alongside it could be streamed to the visitor as their video. */
+  const jar = cookieSession();
+
   // %(ext)s, not a fixed .mp4: yt-dlp names the merged file itself, and
   // guessing wrong means streaming a file that isn't there.
   const template = path.join(dir, "video.%(ext)s");
   let done = false;
   const cleanup = () => {
+    jar.done(); // safe to call twice; the close handler usually gets there first
     if (done) return;
     done = true;
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* already gone */ }
@@ -546,7 +638,7 @@ async function streamMerged(req, res, url, format, platform) {
     "--socket-timeout", "15"
   ];
   if (FFMPEG_LOCATION) args.push("--ffmpeg-location", FFMPEG_LOCATION);
-  args.push("-o", template, url);
+  args.push(...jar.args, "-o", template, url);
 
   const dl = spawn(YTDLP, args);
 
@@ -570,6 +662,9 @@ async function streamMerged(req, res, url, format, platform) {
 
   dl.on("close", (code) => {
     clearTimeout(timer);
+    // Drop the jar copy as soon as yt-dlp lets go of it — the video temp dir
+    // has to outlive this handler to be streamed, but the cookies don't.
+    jar.done();
     if (res.destroyed) return cleanup();
 
     if (code !== 0) {
@@ -746,11 +841,17 @@ app.get("/api/download", rateLimit, async (req, res) => {
     `filename*=UTF-8''${encodeURIComponent(filename)}`
   );
 
+  /* The audio of a login-walled video is just as login-walled as the video, so
+     this needs the session too -- an MP3 of a post the visitor could only reach
+     signed in fails the same way the MP4 would without it. */
+  const jar = cookieSession();
+
   const dl = spawn(YTDLP, [
     "-f", FORMATS.mp3,
     "--no-playlist",
     "--no-warnings",
     "--socket-timeout", "15",
+    ...jar.args,
     "-o", "-",           // stream to stdout
     url
   ]);
@@ -775,7 +876,10 @@ app.get("/api/download", rateLimit, async (req, res) => {
   let failed = "";
   dl.stderr.on("data", (d) => { failed += d; });
 
-  const cleanup = () => children.forEach((c) => { if (!c.killed) c.kill("SIGKILL"); });
+  const cleanup = () => {
+    jar.done();
+    children.forEach((c) => { if (!c.killed) c.kill("SIGKILL"); });
+  };
 
   // If the visitor cancels or navigates away, don't leave yt-dlp running.
   res.on("close", cleanup);
@@ -786,6 +890,7 @@ app.get("/api/download", rateLimit, async (req, res) => {
   });
 
   dl.on("close", (code) => {
+    jar.done();
     if (code !== 0) {
       cleanup();
       // Headers are already out the moment bytes flow, so we can only report a

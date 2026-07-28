@@ -113,6 +113,34 @@ script no-ops. Worth doing when convenient, but not urgent.
 | `YTDLP_PATH` | `server/bin/yt-dlp`, else PATH | Only needed if it's somewhere else. |
 | `FFMPEG_PATH` | `server/bin/ffmpeg`, else PATH | Required, not optional — every video download merges a separate video and audio stream into the MP4, and `mp3` transcodes with it. Passed to yt-dlp as `--ffmpeg-location` whenever it resolves to a path. |
 | `SKIP_TOOL_INSTALL` | *(unset)* | Set to skip the `postinstall` binary fetch entirely — for when you install yt-dlp and ffmpeg yourself. It already no-ops off Linux and whenever both are on PATH (which is what happens in the Docker build). |
+| `YTDLP_COOKIES` | *(unset)* | A Netscape `cookies.txt`, pasted whole, for **any** site yt-dlp touches. This is what gets past a platform's bot check — see below. Escaped `\n` accepted, since host env fields are single-line. |
+| `IG_COOKIES` | *(unset)* | The same thing, kept under its old name because it predates `YTDLP_COOKIES` and is already set on deployed services. Both are merged into one jar; which var you paste into makes no difference to routing. |
+
+### Cookies, and why downloads fail without them
+
+Every platform here treats a datacenter IP as an automation signal. From a
+laptop these links resolve anonymously; from Render they get a bot check
+instead. YouTube's is the one you'll hit first — *"Sign in to confirm you're
+not a bot"* — which the API reports as **"That video is private or needs a
+login."** on a video that is plainly public. A logged-in session is what gets
+past it, and both env vars above are how you supply one.
+
+Export a `cookies.txt` from a logged-in browser session and paste the whole
+file in. A jar is domain-scoped and yt-dlp only offers each site its own
+entries, so one jar can safely carry YouTube, Instagram and Facebook at once —
+an Instagram session is never sent to YouTube.
+
+Two things to expect:
+
+- **Use burner accounts.** Requests come from a datacenter IP and accounts do
+  get banned for it.
+- **Sessions expire**, typically in weeks, and faster for YouTube from cloud
+  IPs. When downloads start failing with the login message again, re-export
+  and re-paste. There is no way around this from inside the server.
+
+Cookies are never read from the master jar directly: yt-dlp and gallery-dl both
+*rewrite* the file they're handed, so every run gets a disposable copy and the
+configured session can't be clobbered by a concurrent download.
 | `MAX_QUALITY` | *(off)* | Set to `1` for pure `bv*+ba/b` — highest resolution wins, codec be damned. Off by default, which prefers H.264+AAC so the file opens on anything; the trade is that YouTube publishes no H.264 above 1080p, so a 4K upload arrives as 1080p. |
 
 ## Maintenance — the part people skip

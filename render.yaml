@@ -31,15 +31,29 @@ services:
       - key: ALLOWED_ORIGINS
         sync: false
 
-      # Netscape cookies.txt from a logged-in Instagram session, pasted whole.
-      # Escaped \n are accepted, since Render's field is single-line.
+      # Netscape cookies.txt from a logged-in session, pasted whole. Escaped \n
+      # are accepted, since Render's field is single-line.
       #
-      # Without it the photo route returns "Instagram needs a login" — Instagram
-      # serves no photo media to logged-out clients. Video is unaffected.
+      # This one covers video, on every platform, and without it most links
+      # fail here even though they work from a laptop: Render's IPs are
+      # datacenter IPs, and the platforms serve those a bot check rather than
+      # the video. YouTube's shows up as "That video is private or needs a
+      # login" on a video that is plainly public.
       #
-      # Use a burner account. This runs from a datacenter IP, which Instagram
-      # reads as automation, and the account can be banned for it. Sessions also
-      # expire after a few weeks, at which point photos start failing with
-      # "the cookies have likely expired" until you paste a fresh export.
+      # A jar is domain-scoped, so one export can carry YouTube, Instagram and
+      # Facebook at once — each site is only ever offered its own entries.
+      - key: YTDLP_COOKIES
+        sync: false
+
+      # The same thing under its older, Instagram-specific name. Kept because
+      # deployed services already set it; both are merged into one jar.
+      #
+      # Instagram serves no photo media to logged-out clients at all, so the
+      # photo route needs a session even from a residential IP.
+      #
+      # Use burner accounts. These run from a datacenter IP, which every
+      # platform reads as automation, and accounts can be banned for it.
+      # Sessions also expire after a few weeks, at which point downloads start
+      # failing with the login message until you paste a fresh export.
       - key: IG_COOKIES
         sync: false
