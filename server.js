@@ -292,15 +292,16 @@ app.get("/api/download", rateLimit, async (req, res) => {
     `attachment; filename="${filename.replace(/[^\x20-\x7E]/g, "_")}"; ` +
     `filename*=UTF-8''${encodeURIComponent(filename)}`
   );
-
-  const dl = spawn(YTDLP, [
-    "-f", FORMATS[format],
-    "--no-playlist",
-    "--no-warnings",
-    "--socket-timeout", "15",
-    "-o", "-",           // stream to stdout
-    url
-  ]);
+const dl = spawn(YTDLP, [
+  "-N", "8",                 // Download 8 fragments at once
+  "--concurrent-fragments", "8",
+  "-f", FORMATS[format],
+  "--no-playlist",
+  "--no-warnings",
+  "--socket-timeout", "15",
+  "-o", "-",
+  url
+]);
 
   let ff = null;
   const children = [dl];
