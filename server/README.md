@@ -164,7 +164,39 @@ replace the Secret File. There is no way around this from inside the server.
 Cookies are never read from the master jar directly: yt-dlp and gallery-dl both
 *rewrite* the file they're handed, so every run gets a disposable copy — which
 also means the read-only Render mount is never written to.
-| `MAX_QUALITY` | *(off)* | Set to `1` for pure `bv*+ba/b` — highest resolution wins, codec be damned. Off by default, which prefers H.264+AAC so the file opens on anything; the trade is that YouTube publishes no H.264 above 1080p, so a 4K upload arrives as 1080p. |
+| `FFPROBE_PATH` | `server/bin/ffprobe`, else PATH | Used to confirm the finished file actually has a video track. If it can't run, the check is skipped rather than failing the download. |
+| `MAX_QUALITY` | *(off)* | Set to `1` to drop the H.264 preference — highest resolution wins, codec be damned. **This is the setting that produces AV1.** Leave it off unless you know every player you care about handles AV1/VP9; see below. |
+
+### If a download plays sound but shows no picture
+
+The file almost certainly *has* a video track — it's just in a codec the player
+can't decode. YouTube serves AV1 and VP9 above 1080p, and both are legal inside
+an MP4, so the download succeeds and then Windows Media Player, stock Android
+players, older Safari and most TVs render audio over a blank frame.
+
+Selection is therefore split in two: **what** to fetch is `bv*+ba/b` (best video
++ best audio, merged; else the best single stream carrying both — no branch can
+resolve to audio-only), and **how to rank** candidates is `-S vcodec:h264`.
+The sort is a *preference*, not a filter: H.264 wins wherever it exists at any
+resolution, and AV1/VP9 remains available when it's all a site has. Because the
+codec term is prepended it outranks resolution, which is the trade this site
+wants — a 1080p file that plays beats a 4K file that doesn't.
+
+If you hit this, check `MAX_QUALITY` first. It removes the codec preference,
+which is exactly how you get a 4K AV1 file that plays as sound only.
+
+Two notes for anyone tempted to tune the sort:
+
+- **Don't add `acodec:aac`.** It ranks the audio field of the *video* candidate
+  too, pushing `bv*` toward low-res muxed streams — measured on a 4K source,
+  adding it dropped the pick from 1080p avc1 to 360p itag 18.
+- **Don't express codec preference as filtered `-f` alternatives.** That was the
+  original bug: only the first link pinned a codec, and the next one was
+  `bv*[ext=mp4]+ba[ext=m4a]` — on YouTube, AV1 formats *are* `ext=mp4`.
+
+As a backstop the finished file is probed before it's sent. If it has no video
+stream at all the request fails with a clear error instead of streaming audio
+under `video/mp4`, because that is the one failure a visitor can't diagnose.
 
 ## Maintenance — the part people skip
 

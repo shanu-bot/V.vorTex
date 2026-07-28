@@ -18,7 +18,7 @@
 
 const express = require("express");
 const cors = require("cors");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const { Readable } = require("stream");
 const os = require("os");
 const fs = require("fs");
@@ -59,7 +59,30 @@ function resolveTool(envVar, name) {
 
 const YTDLP = resolveTool("YTDLP_PATH", "yt-dlp");
 const FFMPEG = resolveTool("FFMPEG_PATH", "ffmpeg");
+const FFPROBE = resolveTool("FFPROBE_PATH", "ffprobe");
 const GALLERYDL = resolveTool("GALLERYDL_PATH", "gallery-dl");
+
+/**
+ * Codec of a file's first video stream.
+ *
+ * Returns "" when the file genuinely has no video track -- the case worth
+ * catching -- and null when ffprobe couldn't answer at all, so a missing
+ * ffprobe degrades to "don't know" rather than failing every download.
+ *
+ * Reads headers only, so it's milliseconds even on a large file.
+ */
+function videoCodec(file) {
+  const r = spawnSync(FFPROBE, [
+    "-v", "error",
+    "-select_streams", "v:0",
+    "-show_entries", "stream=codec_name",
+    "-of", "default=noprint_wrappers=1:nokey=1",
+    file
+  ], { encoding: "utf8", timeout: 20_000 });
+
+  if (r.error || r.status !== 0) return null; // no ffprobe, or it choked
+  return r.stdout.trim();
+}
 
 /* yt-dlp finds ffmpeg on PATH by itself, so it only needs telling when the
    binary is somewhere PATH won't look -- which is exactly the bin/ case above.
@@ -329,71 +352,62 @@ setInterval(() => {
    -------------------------------------------------------------------------- */
 
 /* --------------------------------------------------------------------------
-   Format selectors
+   Format selection: what to download, and how to rank the candidates
 
-   Every video request asks for the best video stream plus the best audio
-   stream and lets ffmpeg mux the pair into an MP4 -- `bv*+ba/b` in yt-dlp's
-   language, with a compatibility-first chain in front of it.
+   Two separate jobs, and conflating them is what produced a file that played
+   sound over a blank picture.
 
-   Why this and not `best`: `best` means "best stream that already has audio in
-   it". On TikTok/IG/FB that is the full-quality file, but on YouTube the only
-   muxed stream is itag 18 (640x360) -- everything above it is video-only DASH,
-   so `best[height<=1080]` silently hands back 360p. Asking for bv*+ba is the
-   only way to get the real thing, and the merge is not optional: the 1080p
-   stream carries no audio track at all, so an unmerged file is silent.
+   WHAT: `bv*+ba/b`. Best video stream plus best audio stream, merged; failing
+   that, the best single stream that already carries both. `bv*` and `b` are
+   both video-bearing by definition and yt-dlp sorts `hasvid` above everything
+   else, so no branch here can resolve to an audio-only format.
 
-   Why a chain and not the bare selector: `bv*+ba` on its own will happily pick
-   VP9/AV1 video and Opus audio, which are smaller but which older phones and
-   stock players won't open -- the point of this site is a file that just
-   plays. So H.264+AAC is asked for first, the bare `bv*+ba` sits behind it so
-   anything without an avc1/m4a pair still resolves at full quality, and the
-   final `b` covers sites that publish one progressive stream and no separate
-   audio track to merge (TikTok, most of Instagram).
+   `bv*+ba` rather than plain `b`: `b` means "best stream that already has
+   audio in it". On TikTok/IG/FB that is the full-quality file, but on YouTube
+   the only muxed stream is itag 18 at 640x360 -- everything above it is
+   video-only DASH. Asking for the pair is the only way to get the real thing,
+   and the merge is not optional: the 1080p stream has no audio track at all.
 
-   `bv*` rather than `bestvideo`: the starred form also considers streams that
-   already carry audio, so a progressive-only site still has a candidate rather
-   than falling through the whole chain.
+   HOW TO RANK: `-S vcodec:h264`, and this is the part that was missing.
 
-   The cost of putting compatibility first is real and worth knowing: YouTube
-   publishes nothing above 1080p in H.264, so a 4K upload comes down as 1080p.
-   Set MAX_QUALITY=1 to reverse the preference -- pure `bv*+ba/b`, highest
-   resolution wins, codec be damned. Everything still ends up in an MP4; some
-   older players just won't open a VP9/AV1 one.
+   The old selector tried to express codec preference by chaining filtered
+   alternatives, and only the first link in that chain actually pinned a codec.
+   The second was `bv*[ext=mp4]+ba[ext=m4a]` -- and on YouTube AV1 formats are
+   `ext=mp4`, so that link handed back AV1 whenever the first one missed. AV1
+   and VP9 inside an MP4 are a valid file that Windows Media Player, stock
+   Android players, older Safari and most TVs decode as audio plus a blank
+   frame. The container promised something the player couldn't read.
+
+   A sort field fixes what a filter chain kept getting wrong: it is a
+   preference, not a requirement, so H.264 wins whenever it exists at any
+   resolution and AV1/VP9 is still available when it's all the site has.
+   Prepending it puts codec above resolution in yt-dlp's ordering, which is the
+   trade this site wants -- a 1080p file that plays beats a 4K file that
+   doesn't.
+
+   Do not add `acodec:aac` to the sort. It ranks the audio field of the *video*
+   candidate too, which pushes `bv*` toward low-res muxed streams: measured on
+   a 4K source, adding it dropped the pick from 1080p avc1 to 360p itag 18.
+
+   MAX_QUALITY=1 drops the codec preference entirely -- highest resolution
+   wins, codec be damned. That is the setting that produces AV1, so if a
+   download plays as sound-only, check whether it is set.
    -------------------------------------------------------------------------- */
 
 const MAX_QUALITY = /^(1|true|yes)$/i.test(process.env.MAX_QUALITY || "");
 
-const BEST_VIDEO = (MAX_QUALITY
-  ? [
-      "bv*+ba",                                 // highest resolution, any codec
-      "b"
-    ]
-  : [
-      "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]", // H.264 + AAC: plays everywhere
-      "bv*[ext=mp4]+ba[ext=m4a]",
-      "bv*+ba",                                 // best of anything, merged
-      "b[ext=mp4]",
-      "b"                                       // single progressive stream
-    ]
-).join("/");
-
-/* Same shape, capped: `sd` exists so someone on a metered connection can take
-   a smaller file, so the cap has to come before quality -- but it still merges
-   audio in, and it still falls through to a merge-free stream if the site has
-   nothing under the cap. */
-const SD_VIDEO = [
-  "bv*[height<=480][ext=mp4][vcodec^=avc1]+ba[ext=m4a]",
-  "bv*[height<=480][ext=mp4]+ba[ext=m4a]",
-  "bv*[height<=480]+ba",
-  "b[height<=480][ext=mp4]",
-  "b[height<=480]",
-  "wv*+ba",
-  "w"
-].join("/");
+/** Preference, not a filter — it can never make a selection fail. */
+const FORMAT_SORT = MAX_QUALITY ? null : "vcodec:h264";
 
 const FORMATS = {
-  hd: BEST_VIDEO,
-  sd: SD_VIDEO,
+  hd: "bv*+ba/b",
+
+  /* `sd` exists so someone on a metered connection can take a smaller file, so
+     the cap comes first -- but it still merges audio in, and it still falls
+     back to the uncapped pair rather than failing if a site publishes nothing
+     under the cap. */
+  sd: "bv*[height<=480]+ba/b[height<=480]/bv*+ba/b",
+
   mp3: "bestaudio/best"
 };
 
@@ -702,7 +716,7 @@ async function streamMerged(req, res, url, format, platform) {
 
   const args = [
     "-f", format,
-    // The merge target. --remux-video covers the other half: when the chain
+    // The merge target. --remux-video covers the other half: when the selector
     // falls through to a single progressive stream there is nothing to merge,
     // and this is what turns a lone .webm into the .mp4 we promised.
     "--merge-output-format", "mp4",
@@ -717,6 +731,9 @@ async function streamMerged(req, res, url, format, platform) {
     "--no-part",
     "--socket-timeout", "15"
   ];
+  // Codec preference, applied to every branch of the selector at once. See the
+  // format-selection note above for why this is a sort and not a filter.
+  if (FORMAT_SORT) args.push("-S", FORMAT_SORT);
   if (FFMPEG_LOCATION) args.push("--ffmpeg-location", FFMPEG_LOCATION);
   args.push(...jar.args, "-o", template, url);
 
@@ -765,7 +782,30 @@ async function streamMerged(req, res, url, format, platform) {
       return res.status(502).json({ error: "The merge produced no file." });
     }
 
-    const file = path.join(dir, files[0]);
+    /* The largest file, not the first. A completed merge leaves exactly one
+       file behind, but if yt-dlp ever leaves a fragment next to it, readdir
+       order is not defined to put the finished video first -- and the
+       alphabetically-first name is usually the `.fNNN.m4a` audio fragment,
+       which would stream out as an MP4 with no picture. */
+    const file = files
+      .map((f) => path.join(dir, f))
+      .sort((a, b) => fs.statSync(b).size - fs.statSync(a).size)[0];
+
+    /* Last line of defence: confirm there is actually a video track before
+       calling this an MP4. Serving an audio stream under video/mp4 is the one
+       failure a visitor cannot diagnose -- it plays, it just has no picture --
+       so it fails loudly here instead. */
+    const codec = videoCodec(file);
+    if (codec === "") {
+      console.error(`[${platform}] merged file has no video stream (selector: ${format})`);
+      cleanup();
+      if (!res.headersSent) {
+        res.status(502).json({ error: "That came back without a video track. Try again." });
+      }
+      return;
+    }
+    console.log(`[${platform}] serving ${path.basename(file)} (${codec || "codec unknown"})`);
+
     const size = fs.statSync(file).size;
     const filename = safeFilename(res.locals.title || "video", path.extname(files[0]).slice(1) || "mp4");
 
