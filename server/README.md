@@ -165,7 +165,48 @@ Cookies are never read from the master jar directly: yt-dlp and gallery-dl both
 *rewrite* the file they're handed, so every run gets a disposable copy — which
 also means the read-only Render mount is never written to.
 | `FFPROBE_PATH` | `server/bin/ffprobe`, else PATH | Used to confirm the finished file actually has a video track. If it can't run, the check is skipped rather than failing the download. |
+| `RAW_ERRORS` | *(off)* | Set to `1` to stop redacting filesystem paths and URL query strings out of error responses. The server log is unredacted either way. |
 | `MAX_QUALITY` | *(off)* | Set to `1` to drop the H.264 preference — highest resolution wins, codec be damned. **This is the setting that produces AV1.** Leave it off unless you know every player you care about handles AV1/VP9; see below. |
+
+### Errors
+
+Every failure returns the same shape, and the message is the tool's own text
+rather than a sentence this server made up:
+
+```json
+{
+  "error":  "ERROR: [youtube] dQw4w9WgXcQ: Sign in to confirm you're not a bot. ... [server has no cookie jar loaded — see COOKIES_FILE / Render Secret Files]",
+  "code":   "bot_check",
+  "detail": "full stderr, including yt-dlp's warnings"
+}
+```
+
+`code` is there so you can grep logs and so the frontend can branch without
+regexing prose: `bot_check`, `rate_limited`, `http_403`, `http_401`,
+`login_required`, `cookies`, `unsupported_url`, `geo_blocked`,
+`extractor_error`, `unavailable`, `network`, `timeout`, `tool_missing`,
+`no_output`, `no_video_stream`, `bad_json`, `unsupported_link`, `bad_format`,
+`bad_photo_index`, `blocked_media_host`, `no_temp_space`, `unknown`.
+
+When the failure looks like authentication (`bot_check`, `login_required`,
+`http_401/403`, `cookies`) **and no jar is loaded**, the message says so. That
+is the one thing the tool cannot tell you, because it doesn't know, and it's
+the first thing to check.
+
+yt-dlp warnings are no longer suppressed. *"You have requested merging of
+multiple formats but ffmpeg is not installed"* is a warning, not an error —
+suppressing it while asking why a download failed is self-defeating. Warnings
+go to stderr, which is only read on failure, so nothing else changes.
+
+**Paths and query strings are redacted** from responses. `/etc/secrets/cookies.txt`
+tells a stranger both that a session exists and where it lives, and signed CDN
+URLs carry credentials in the query string; neither helps you debug, since the
+signal is the status code and the sentence. Paths collapse to `…/basename` and
+query strings become `?<redacted>`. Set **`RAW_ERRORS=1`** for verbatim output.
+
+The unredacted text is always written to the server log regardless, with the
+platform and exit code — so on Render, the log is the full picture and the
+response is the safe subset.
 
 ### How a download spends its time
 

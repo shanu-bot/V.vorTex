@@ -335,7 +335,7 @@ function rateLimit(req, res, next) {
   if (rec.count >= MAX_HITS) {
     const retry = Math.ceil((rec.reset - now) / 1000);
     res.set("Retry-After", String(retry));
-    return res.status(429).json({ error: `Too many requests. Try again in ${retry}s.` });
+    return res.status(429).json({ error: `Too many requests. Try again in ${retry}s.`, code: "rate_limited", detail: null });
   }
   rec.count++;
   next();
@@ -490,7 +490,11 @@ function ytdlpJson(url, timeoutMs = 25_000, selector = null) {
        when that means merging two streams. One extraction answers both "what
        is this?" and "will this need ffmpeg?", which is what lets the download
        route skip its own probe entirely. */
-    const args = ["-J", "--no-playlist", "--no-warnings", "--socket-timeout", "15"];
+    /* Warnings are left on. yt-dlp says things like "ffmpeg not found; merging
+       is disabled" as a warning, not an error, and suppressing those while
+       asking why a download failed is self-defeating. They land on stderr,
+       which is only ever read on failure, so stdout stays clean JSON. */
+    const args = ["-J", "--no-playlist", "--socket-timeout", "15"];
     if (selector) {
       args.push("-f", selector);
       if (FORMAT_SORT) args.push("-S", FORMAT_SORT);
@@ -505,30 +509,47 @@ function ytdlpJson(url, timeoutMs = 25_000, selector = null) {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       jar.done();
-      reject(new Error("Timed out reading that link."));
+      reject(Object.assign(new Error(`Timed out after ${timeoutMs}ms reading that link.`), {
+        code: "timeout",
+        stderr: err,
+        detail: redact(err.trim()) || null
+      }));
     }, timeoutMs);
 
     child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { err += d; });
-    child.on("error", () => {
+    child.on("error", (e) => {
       clearTimeout(timer);
       jar.done();
-      reject(new Error("yt-dlp is not installed on the server."));
+      reject(Object.assign(new Error(redact(`Could not run yt-dlp (${YTDLP}): ${e.message}`)), {
+        code: "tool_missing",
+        stderr: "",
+        detail: null
+      }));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
       jar.done();
       if (code !== 0) {
-        const e = new Error(friendlyError(err));
-        // Keep the raw text: /api/info reads it to tell "this is a photo post"
-        // apart from a genuine failure. friendlyError() flattens that away.
+        const info = toolError(err, "yt-dlp");
+        const e = new Error(info.error);
+        e.code = info.code;
+        e.detail = info.detail;
+        e.exitCode = code;
+        // Keep the raw text too: /api/info reads it to tell "this is a photo
+        // post" apart from a genuine failure, and that match needs the
+        // original string rather than the redacted one.
         e.stderr = err;
         return reject(e);
       }
       try {
         resolve(JSON.parse(out));
-      } catch {
-        reject(new Error("Could not read that video's details."));
+      } catch (e) {
+        reject(Object.assign(new Error(`yt-dlp returned unparseable JSON: ${e.message}`), {
+          code: "bad_json",
+          stderr: err,
+          detail: redact(out.slice(0, 500)) || null
+        }));
       }
     });
   });
@@ -590,54 +611,137 @@ function galleryUrls(url, timeoutMs = 25_000) {
 
     child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { err += d; });
-    child.on("error", () => {
+    child.on("error", (e) => {
       clearTimeout(timer);
       jar.done();
-      reject(new Error("gallery-dl is not installed on the server."));
+      reject(Object.assign(new Error(redact(`Could not run gallery-dl (${GALLERYDL}): ${e.message}`)), {
+        code: "tool_missing", detail: null
+      }));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
       jar.done();
       const urls = out.split("\n").map((s) => s.trim()).filter(Boolean);
 
-      if (code !== 0 || !urls.length) return reject(new Error(photoError(err)));
+      if (code !== 0 || !urls.length) {
+        console.error(`[gallery-dl] exit ${code}: ${err.trim()}`);
+        const info = toolError(err, "gallery-dl");
+        return reject(Object.assign(new Error(info.error), {
+          code: info.code, detail: info.detail, exitCode: code
+        }));
+      }
 
       const safe = urls.filter(isAllowedMedia);
-      if (!safe.length) return reject(new Error("Couldn't read that post's photos."));
+      if (!safe.length) {
+        return reject(Object.assign(
+          new Error(`gallery-dl returned ${urls.length} URL(s), none on an allowed media host.`),
+          { code: "blocked_media_host", detail: redact(urls.slice(0, 3).join("\n")) }
+        ));
+      }
       resolve(safe);
     });
   });
 }
 
-/** Turn gallery-dl's stderr into something a visitor can act on. */
-function photoError(stderr) {
-  const s = (stderr || "").toLowerCase();
-  if (s.includes("login") || s.includes("authentication") || s.includes("401") || s.includes("403")) {
-    return COOKIE_FILE
-      ? "Instagram rejected the saved session. The cookies have likely expired."
-      : "Instagram needs a login to fetch photos. The server has no session configured.";
-  }
-  if (s.includes("not found") || s.includes("404")) return "That post doesn't exist or was removed.";
-  if (s.includes("private")) return "That account is private.";
-  return "Couldn't fetch that post's photos.";
+/* --------------------------------------------------------------------------
+   Error reporting
+
+   These used to flatten every failure into one of five sentences, which is
+   fine for a visitor and useless for anyone trying to work out why. "That
+   video is unavailable or has been removed" was returned for a bot check, an
+   expired session, a 403, and a genuinely deleted video alike -- four
+   different problems with four different fixes.
+
+   So the real text comes back now. `error` is the tool's own message, `code`
+   is a machine-readable classification, and `detail` is the full stderr.
+
+   REDACTION. These responses go to anyone who can reach the API, and yt-dlp
+   happily prints absolute paths (`/etc/secrets/cookies.txt` tells a stranger
+   both that a session exists and where it lives) and signed CDN URLs with
+   credentials in the query string. Neither helps you debug: the diagnostic
+   signal is the status code and the sentence, not the filesystem layout. So
+   paths collapse to their basename and query strings are stripped, and
+   everything else passes through untouched. Set RAW_ERRORS=1 to disable that
+   if you'd rather have it verbatim.
+
+   The unredacted text is always logged server-side regardless.
+   -------------------------------------------------------------------------- */
+
+const RAW_ERRORS = /^(1|true|yes)$/i.test(process.env.RAW_ERRORS || "");
+
+function redact(text) {
+  if (RAW_ERRORS) return text;
+  return String(text)
+    // Signed media URLs: keep the host so you can see who refused you, drop
+    // the query string, which is where the tokens live.
+    .replace(/(https?:\/\/[^\s?"']+)\?[^\s"']*/gi, "$1?<redacted>")
+    // Absolute paths, POSIX and Windows, down to the last segment.
+    .replace(/(?:\/[\w.-]+)+\/([\w.-]+)/g, "…/$1")
+    .replace(/[A-Za-z]:\\(?:[\w.-]+\\)+([\w.-]+)/g, "…\\$1");
 }
 
-/** Turn yt-dlp's stderr into something a visitor can act on. */
-function friendlyError(stderr) {
-  const s = (stderr || "").toLowerCase();
-  if (s.includes("private") || s.includes("login") || s.includes("cookies")) {
-    return "That video is private or needs a login.";
+/** The lines that actually say something, newest-first-ish, without the noise. */
+function meaningfulLines(stderr) {
+  const lines = String(stderr || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    // Python tracebacks are frames, not reasons; the reason is the last line.
+    .filter((l) => !/^(File "|\s{2,}|Traceback)/.test(l));
+
+  const errors = lines.filter((l) => /^(ERROR|yt-dlp: error)/i.test(l));
+  return errors.length ? errors : lines;
+}
+
+/** Coarse classification, for log-grepping and for the frontend to branch on. */
+function classifyError(stderr) {
+  const s = String(stderr || "").toLowerCase();
+  if (/sign in to confirm|not a bot|captcha/.test(s)) return "bot_check";
+  if (/http error 429|too many requests/.test(s)) return "rate_limited";
+  if (/http error 403|403 forbidden/.test(s)) return "http_403";
+  if (/http error 401|401 unauthorized/.test(s)) return "http_401";
+  if (/private video|members-only|login required|requires authentication|account.*private/.test(s)) {
+    return "login_required";
   }
-  if (s.includes("not available") || s.includes("unavailable") || s.includes("removed")) {
-    return "That video is unavailable or has been removed.";
+  if (/cookies/.test(s)) return "cookies";
+  if (/unsupported url/.test(s)) return "unsupported_url";
+  if (/geo|not available in your country|blocked it in your country/.test(s)) return "geo_blocked";
+  if (/unable to extract|extractorerror|failed to parse/.test(s)) return "extractor_error";
+  if (/http error 404|not found|does not exist|video unavailable|has been removed|been terminated/.test(s)) {
+    return "unavailable";
   }
-  if (s.includes("404") || s.includes("not found")) {
-    return "That link doesn't point to a video.";
+  if (/timed out|timeout|connection reset|temporary failure in name resolution/.test(s)) {
+    return "network";
   }
-  if (s.includes("unsupported url")) {
-    return "That link isn't a supported video page.";
+  return "unknown";
+}
+
+/**
+ * Build the error payload for a failed yt-dlp / gallery-dl run.
+ *
+ * `tool` only shapes the fallback sentence for the case where the process died
+ * without saying anything -- a SIGKILL from the timeout, typically.
+ */
+function toolError(stderr, tool = "yt-dlp") {
+  const code = classifyError(stderr);
+  const lines = meaningfulLines(stderr);
+
+  let message = lines.length
+    ? redact(lines.slice(-3).join(" "))
+    : `${tool} failed without reporting a reason (it may have been killed by the timeout).`;
+
+  /* The one thing the tool cannot tell you, because it doesn't know: whether
+     this server was even given a session. An auth failure reads completely
+     differently depending on the answer, and it's the first thing to check. */
+  if (!COOKIE_FILE && ["bot_check", "login_required", "http_403", "http_401", "cookies"].includes(code)) {
+    message += " [server has no cookie jar loaded — see COOKIES_FILE / Render Secret Files]";
   }
-  return "Couldn't fetch that video. Check the link and try again.";
+
+  return {
+    error: message,
+    code,
+    detail: redact(String(stderr || "").trim()) || null
+  };
 }
 
 const humanSize = (bytes) => {
@@ -694,7 +798,7 @@ app.get("/api/info", rateLimit, async (req, res) => {
   const platform = classify(url);
 
   if (!platform) {
-    return res.status(400).json({ error: "Unsupported link. Use TikTok, Instagram, Facebook or YouTube." });
+    return res.status(400).json({ error: "Unsupported link. Use TikTok, Instagram, Facebook or YouTube.", code: "unsupported_link", detail: null });
   }
 
   try {
@@ -745,7 +849,12 @@ app.get("/api/info", rateLimit, async (req, res) => {
       thumbnail: info.thumbnail || null
     });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    console.error(`[${platform}] /api/info failed (${err.code || "?"}): ${err.stderr || err.message}`);
+    res.status(502).json({
+      error: err.message,
+      code: err.code || "unknown",
+      detail: err.detail || null
+    });
   }
 });
 
@@ -771,7 +880,7 @@ async function streamMerged(req, res, url, format, platform) {
   try {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "vh-mux-"));
   } catch {
-    return res.status(500).json({ error: "Server has no writable temp space." });
+    return res.status(500).json({ error: "Server has no writable temp space.", code: "no_temp_space", detail: null });
   }
 
   /* The jar gets its own directory, deliberately not this one: the merged file
@@ -803,7 +912,6 @@ async function streamMerged(req, res, url, format, platform) {
     // that nothing reaches the visitor until the merge finishes.
     "--concurrent-fragments", "8",
     "--no-playlist",
-    "--no-warnings",
     "--no-part",
     "--socket-timeout", "15"
   ];
@@ -827,10 +935,16 @@ async function streamMerged(req, res, url, format, platform) {
     cleanup();
   });
 
-  dl.on("error", () => {
+  dl.on("error", (e) => {
     clearTimeout(timer);
     cleanup();
-    if (!res.headersSent) res.status(500).json({ error: "yt-dlp is not installed on the server." });
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: redact(`Could not run yt-dlp (${YTDLP}): ${e.message}`),
+        code: "tool_missing",
+        detail: null
+      });
+    }
   });
 
   dl.on("close", (code) => {
@@ -841,12 +955,11 @@ async function streamMerged(req, res, url, format, platform) {
     if (res.destroyed) return cleanup();
 
     if (code !== 0) {
-      // Log the raw text: friendlyError() flattens every failure into the same
-      // sentence, which is right for a visitor and useless when a merge breaks
-      // in production and this is all you have.
-      console.error(`[${platform}] yt-dlp exit ${code}: ${err.trim().split("\n").slice(-3).join(" | ")}`);
+      // Unredacted, and the whole thing: the logs are yours, the response is
+      // the internet's.
+      console.error(`[${platform}] yt-dlp exit ${code} (merge path):\n${err.trim()}`);
       cleanup();
-      if (!res.headersSent) res.status(502).json({ error: friendlyError(err) });
+      if (!res.headersSent) res.status(502).json(toolError(err, "yt-dlp"));
       return;
     }
 
@@ -854,8 +967,13 @@ async function streamMerged(req, res, url, format, platform) {
       try { return fs.readdirSync(dir); } catch { return []; }
     })();
     if (!files.length) {
+      console.error(`[${platform}] yt-dlp exited 0 but produced no file. stderr:\n${err.trim()}`);
       cleanup();
-      return res.status(502).json({ error: "The merge produced no file." });
+      return res.status(502).json({
+        error: "yt-dlp exited successfully but produced no file.",
+        code: "no_output",
+        detail: redact(err.trim()) || null
+      });
     }
 
     /* The largest file, not the first. A completed merge leaves exactly one
@@ -873,10 +991,25 @@ async function streamMerged(req, res, url, format, platform) {
        so it fails loudly here instead. */
     const codec = videoCodec(file);
     if (codec === "") {
-      console.error(`[${platform}] merged file has no video stream (selector: ${format})`);
+      /* Reached this with a deliberately broken ffmpeg during testing: yt-dlp
+         exits 0, the merge never happens, and the only thing left in the
+         directory is the `.fNNN.m4a` audio fragment. So say that, rather than
+         just "no video" -- a failed merge is far and away the likeliest cause,
+         and the file list is the evidence. */
+      console.error(
+        `[${platform}] no video stream in ${path.basename(file)}; ` +
+        `merge likely failed. dir: [${files.join(", ")}] stderr:\n${err.trim()}`
+      );
       cleanup();
       if (!res.headersSent) {
-        res.status(502).json({ error: "That came back without a video track. Try again." });
+        res.status(502).json({
+          error:
+            `The finished file has no video stream — the merge appears to have failed ` +
+            `(kept "${path.basename(file)}" of [${files.join(", ")}], selector: ${format}). ` +
+            `Check that ffmpeg is present and runnable.`,
+          code: "no_video_stream",
+          detail: redact(err.trim()) || null
+        });
       }
       return;
     }
@@ -943,7 +1076,6 @@ function streamProgressive(req, res, url, plan, title, platform) {
   const args = [
     "-f", plan.formatId,
     "--no-playlist",
-    "--no-warnings",
     "--concurrent-fragments", "8",
     "--socket-timeout", "15",
     ...jar.args,
@@ -963,19 +1095,26 @@ function streamProgressive(req, res, url, plan, title, platform) {
 
   dl.stdout.pipe(res);
 
-  dl.on("error", () => {
+  dl.on("error", (e) => {
     cleanup();
-    if (!res.headersSent) res.status(500).json({ error: "yt-dlp is not installed on the server." });
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: redact(`Could not run yt-dlp (${YTDLP}): ${e.message}`),
+        code: "tool_missing",
+        detail: null
+      });
+    }
   });
 
   dl.on("close", (code) => {
     jar.done();
     if (code === 0) return;
-    console.error(`[${platform}] yt-dlp exit ${code}: ${failed.trim().split("\n").slice(-3).join(" | ")}`);
-    // Headers left the building with the first byte, so a clean JSON error is
-    // only possible if nothing has been sent. Otherwise cut the stream and let
-    // the browser show it as a failed download.
-    if (!res.headersSent) res.status(502).json({ error: friendlyError(failed) });
+    console.error(`[${platform}] yt-dlp exit ${code} (stream path):\n${failed.trim()}`);
+    /* Headers left the building with the first byte, so a clean JSON error is
+       only possible if nothing has been sent. Otherwise cut the stream and let
+       the browser show it as a failed download -- the reason is in the log
+       above either way, which is the point of logging it unredacted. */
+    if (!res.headersSent) res.status(502).json(toolError(failed, "yt-dlp"));
     else res.destroy();
   });
 }
@@ -992,14 +1131,18 @@ async function streamPhoto(req, res, url, index, platform) {
   try {
     photos = await galleryUrls(url);
   } catch (err) {
-    return res.status(502).json({ error: err.message });
+    return res.status(502).json({
+      error: err.message,
+      code: err.code || "unknown",
+      detail: err.detail || null
+    });
   }
 
   if (index >= photos.length) {
     return res.status(404).json({
-      error: photos.length === 1
-        ? "That post has only one photo."
-        : `That post has ${photos.length} photos.`
+      error: `Photo index ${index} out of range; that post has ${photos.length}.`,
+      code: "bad_photo_index",
+      detail: null
     });
   }
 
@@ -1007,7 +1150,7 @@ async function streamPhoto(req, res, url, index, platform) {
   // galleryUrls() already filtered, but re-check at the line that actually
   // performs the fetch -- that's the one that matters.
   if (!isAllowedMedia(target)) {
-    return res.status(502).json({ error: "Unexpected media host." });
+    return res.status(502).json({ error: "Unexpected media host.", code: "blocked_media_host", detail: null });
   }
 
   const ctrl = new AbortController();
@@ -1017,9 +1160,17 @@ async function streamPhoto(req, res, url, index, platform) {
   let upstream;
   try {
     upstream = await fetch(target, { signal: ctrl.signal });
-  } catch {
+  } catch (e) {
     clearTimeout(timer);
-    if (!res.headersSent) res.status(502).json({ error: "Couldn't reach the photo CDN." });
+    const host = (() => { try { return new URL(target).host; } catch { return "the CDN"; } })();
+    console.error(`[${platform}] photo fetch failed from ${host}: ${e.message}`);
+    if (!res.headersSent) {
+      res.status(502).json({
+        error: `Could not reach ${host}: ${e.name === "AbortError" ? "timed out after 25s" : e.message}`,
+        code: e.name === "AbortError" ? "timeout" : "network",
+        detail: null
+      });
+    }
     return;
   }
   // Headers are in. From here the stream is the client's to cancel, so the
@@ -1027,7 +1178,13 @@ async function streamPhoto(req, res, url, index, platform) {
   clearTimeout(timer);
 
   if (!upstream.ok || !upstream.body) {
-    return res.status(502).json({ error: "The photo CDN refused that request." });
+    const host = (() => { try { return new URL(target).host; } catch { return "the CDN"; } })();
+    console.error(`[${platform}] photo CDN ${host} returned HTTP ${upstream.status}`);
+    return res.status(502).json({
+      error: `${host} returned HTTP ${upstream.status} ${upstream.statusText || ""}`.trim(),
+      code: `http_${upstream.status}`,
+      detail: null
+    });
   }
 
   const type = upstream.headers.get("content-type") || "image/jpeg";
@@ -1068,7 +1225,7 @@ app.get("/api/download", rateLimit, async (req, res) => {
   const platform = classify(url);
 
   if (!platform) {
-    return res.status(400).json({ error: "Unsupported link." });
+    return res.status(400).json({ error: "Unsupported link.", code: "unsupported_link", detail: null });
   }
 
   /* Photos never touch yt-dlp: it can't see them. One image per request
@@ -1078,13 +1235,13 @@ app.get("/api/download", rateLimit, async (req, res) => {
   if (format === "photo") {
     const i = Number.parseInt(req.query.i ?? "0", 10);
     if (!Number.isInteger(i) || i < 0) {
-      return res.status(400).json({ error: "Bad photo index." });
+      return res.status(400).json({ error: "Bad photo index.", code: "bad_photo_index", detail: null });
     }
     return streamPhoto(req, res, url, i, platform);
   }
 
   if (!FORMATS[format]) {
-    return res.status(400).json({ error: "Unknown format. Use hd, sd, mp3 or photo." });
+    return res.status(400).json({ error: `Unknown format "${format}". Use hd, sd, mp3 or photo.`, code: "bad_format", detail: null });
   }
 
   /* One extraction, and usually zero: /api/info ran this exact query moments
@@ -1155,7 +1312,6 @@ app.get("/api/download", rateLimit, async (req, res) => {
   const dl = spawn(YTDLP, [
     "-f", FORMATS.mp3,
     "--no-playlist",
-    "--no-warnings",
     "--socket-timeout", "15",
     ...jar.args,
     "-o", "-",           // stream to stdout
@@ -1190,19 +1346,26 @@ app.get("/api/download", rateLimit, async (req, res) => {
   // If the visitor cancels or navigates away, don't leave yt-dlp running.
   res.on("close", cleanup);
 
-  dl.on("error", () => {
+  dl.on("error", (e) => {
     cleanup();
-    if (!res.headersSent) res.status(500).json({ error: "yt-dlp is not installed on the server." });
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: redact(`Could not run yt-dlp (${YTDLP}): ${e.message}`),
+        code: "tool_missing",
+        detail: null
+      });
+    }
   });
 
   dl.on("close", (code) => {
     jar.done();
     if (code !== 0) {
+      console.error(`[${platform}] yt-dlp exit ${code} (mp3 path):\n${failed.trim()}`);
       cleanup();
       // Headers are already out the moment bytes flow, so we can only report a
       // clean error if nothing has been sent yet. Otherwise: cut the stream and
       // let the browser surface it as a failed download.
-      if (!res.headersSent) res.status(502).json({ error: friendlyError(failed) });
+      if (!res.headersSent) res.status(502).json(toolError(failed, "yt-dlp"));
       else res.destroy();
     }
   });
@@ -1233,7 +1396,7 @@ if (SERVE_SITE) {
   }));
 }
 
-app.use((_req, res) => res.status(404).json({ error: "Not found." }));
+app.use((_req, res) => res.status(404).json({ error: "Not found.", code: "not_found", detail: null }));
 
 app.listen(PORT, () => {
   console.log(`Vid VorTex API listening on :${PORT}`);
