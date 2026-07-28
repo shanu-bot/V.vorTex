@@ -399,14 +399,31 @@ const MAX_QUALITY = /^(1|true|yes)$/i.test(process.env.MAX_QUALITY || "");
 /** Preference, not a filter — it can never make a selection fail. */
 const FORMAT_SORT = MAX_QUALITY ? null : "vcodec:h264";
 
+/* Two tails on every video selector, both there so a request cannot die of
+   "Requested format is not available":
+
+   `ba[acodec^=mp4a]` first, plain `ba` behind it. AAC is asked for by name
+   because the alternative is Opus, and Opus inside an MP4 is the audio mirror
+   of the AV1 problem -- a legal file that plays picture with no sound on the
+   same players. This lives in the selector rather than in -S because
+   `acodec:aac` in the sort also ranks the *video* candidate's audio field and
+   drags `bv*` toward low-res muxed streams: measured, it moved a 4K source
+   from 1080p avc1 down to 360p itag 18. Measured the other way, moving it here
+   changed 137+251 (opus) to 137+140 (aac) with the same 1080p H.264 video.
+
+   `/bv*` last, for a video with no audio track at all. Without it `bv*+ba`
+   fails (nothing to pair) and `b` fails (nothing carries both) and a perfectly
+   downloadable silent video returns an error. `bv*` is still video-bearing, so
+   this cannot resurrect the audio-only bug; the worst case is a silent file,
+   which beats no file. */
 const FORMATS = {
-  hd: "bv*+ba/b",
+  hd: "bv*+ba[acodec^=mp4a]/bv*+ba/b/bv*",
 
   /* `sd` exists so someone on a metered connection can take a smaller file, so
      the cap comes first -- but it still merges audio in, and it still falls
      back to the uncapped pair rather than failing if a site publishes nothing
      under the cap. */
-  sd: "bv*[height<=480]+ba/b[height<=480]/bv*+ba/b",
+  sd: "bv*[height<=480]+ba[acodec^=mp4a]/bv*[height<=480]+ba/b[height<=480]/bv*+ba/b/bv*",
 
   mp3: "bestaudio/best"
 };
@@ -706,6 +723,9 @@ function classifyError(stderr) {
   if (/cookies/.test(s)) return "cookies";
   if (/unsupported url/.test(s)) return "unsupported_url";
   if (/geo|not available in your country|blocked it in your country/.test(s)) return "geo_blocked";
+  if (/requested format is not available|requested format was not available/.test(s)) {
+    return "format_unavailable";
+  }
   if (/unable to extract|extractorerror|failed to parse/.test(s)) return "extractor_error";
   if (/http error 404|not found|does not exist|video unavailable|has been removed|been terminated/.test(s)) {
     return "unavailable";
@@ -734,7 +754,9 @@ function toolError(stderr, tool = "yt-dlp") {
      this server was even given a session. An auth failure reads completely
      differently depending on the answer, and it's the first thing to check. */
   if (!COOKIE_FILE && ["bot_check", "login_required", "http_403", "http_401", "cookies"].includes(code)) {
-    message += " [server has no cookie jar loaded — see COOKIES_FILE / Render Secret Files]";
+    // Plain ASCII on purpose: this string ends up in logs and consoles whose
+    // encoding is not always UTF-8, and a mangled em-dash reads like a bug.
+    message += " [server has no cookie jar loaded - see COOKIES_FILE / Render Secret Files]";
   }
 
   return {
@@ -1055,33 +1077,46 @@ async function streamMerged(req, res, url, format, platform) {
  * the routing note in /api/download. Anything else still takes the merge path,
  * because that is what can guarantee a seekable, remuxed MP4.
  */
-function streamProgressive(req, res, url, plan, title, platform) {
+function streamProgressive(req, res, url, plan, title, platform, selector) {
   const filename = safeFilename(title, "mp4");
 
   res.setHeader("Content-Type", "video/mp4");
-  // Only when yt-dlp reported an exact size. filesize_approx is an estimate,
-  // and a Content-Length that disagrees with the body truncates the download.
-  if (plan.size) res.setHeader("Content-Length", String(plan.size));
   res.setHeader(
     "Content-Disposition",
     `attachment; filename="${filename.replace(/[^\x20-\x7E]/g, "_")}"; ` +
     `filename*=UTF-8''${encodeURIComponent(filename)}`
   );
 
+  /* No Content-Length, deliberately. The plan's size belongs to the format id
+     below, and that id is now allowed to fall back to a different one -- a
+     Content-Length that disagrees with the body truncates the file, which is
+     a far worse outcome than a download with no percentage on it. */
+
   const jar = cookieSession();
 
-  /* The exact format id from the plan, not the selector. The selector was
-     already resolved once; re-resolving it risks landing on a different format
-     than the one whose size and codec were just vetted. */
+  /* The plan's exact format id, then a fallback.
+     A format id is a fact about one extraction, not a permanent name: YouTube
+     hands different clients different format sets, and the plan can be up to
+     five minutes old, so by the time this runs the id may simply not exist --
+     "Requested format is not available", and a download that fails for a
+     reason the visitor cannot act on.
+
+     `b[ext=mp4]` is the fallback rather than the full selector because this
+     path pipes to stdout: `b` is a single already-muxed file by definition,
+     where the full selector could resolve to a two-stream merge, and piping a
+     merge produces MPEG-TS wearing an .mp4 name. The sort still applies, so
+     the fallback prefers H.264 exactly like the primary path.
+
+     If even that misses, the close handler re-routes to the merge path, which
+     can satisfy any selector. */
   const args = [
-    "-f", plan.formatId,
+    "-f", `${plan.formatId}/b[ext=mp4]`,
     "--no-playlist",
     "--concurrent-fragments", "8",
-    "--socket-timeout", "15",
-    ...jar.args,
-    "-o", "-",
-    url
+    "--socket-timeout", "15"
   ];
+  if (FORMAT_SORT) args.push("-S", FORMAT_SORT);
+  args.push(...jar.args, "-o", "-", url);
 
   const dl = spawn(YTDLP, args);
   let failed = "";
@@ -1093,7 +1128,12 @@ function streamProgressive(req, res, url, plan, title, platform) {
   };
   res.on("close", cleanup);
 
-  dl.stdout.pipe(res);
+  /* `end: false` is load-bearing. A plain pipe() ends the response as soon as
+     yt-dlp's stdout closes -- including when it closes having produced nothing,
+     which commits an empty 200 before the exit code is even known and leaves
+     no way to recover. Holding the end back means a failed run that wrote
+     nothing has still sent nothing, so it can be retried a different way. */
+  dl.stdout.pipe(res, { end: false });
 
   dl.on("error", (e) => {
     cleanup();
@@ -1108,14 +1148,34 @@ function streamProgressive(req, res, url, plan, title, platform) {
 
   dl.on("close", (code) => {
     jar.done();
-    if (code === 0) return;
-    console.error(`[${platform}] yt-dlp exit ${code} (stream path):\n${failed.trim()}`);
-    /* Headers left the building with the first byte, so a clean JSON error is
-       only possible if nothing has been sent. Otherwise cut the stream and let
-       the browser show it as a failed download -- the reason is in the log
-       above either way, which is the point of logging it unredacted. */
-    if (!res.headersSent) res.status(502).json(toolError(failed, "yt-dlp"));
-    else res.destroy();
+
+    // Bytes went out and the process was happy: finish the response ourselves,
+    // since the pipe was told not to.
+    if (code === 0 && res.headersSent) return res.end();
+
+    if (code !== 0) {
+      console.error(`[${platform}] yt-dlp exit ${code} (stream path):\n${failed.trim()}`);
+    } else {
+      console.error(`[${platform}] yt-dlp exited 0 on the stream path but produced no bytes`);
+    }
+
+    /* Nothing written means nothing committed, so this is still recoverable:
+       hand the request to the merge path, which takes the full selector and
+       can satisfy it by merging, remuxing or falling back further. Covers the
+       reported failure exactly -- a format id from a cached plan that no
+       longer exists -- and also the odder case of a clean exit with no output.
+
+       The plan this attempt was built on is evidently wrong, so drop it rather
+       than let the next click walk into the same wall. */
+    if (!res.headersSent) {
+      plans.delete(planKey(url, selector));
+      console.log(`[${platform}] stream attempt failed, retrying via the merge path`);
+      return streamMerged(req, res, url, selector, platform);
+    }
+
+    // Bytes are already out; all that's left is to cut the stream and let the
+    // browser surface it. The reason is in the log above.
+    res.destroy();
   });
 }
 
@@ -1284,7 +1344,7 @@ app.get("/api/download", rateLimit, async (req, res) => {
 
     if (canStream) {
       console.log(`[${platform}] streaming ${plan.formatId} (${plan.vcodec}) — no merge needed`);
-      return streamProgressive(req, res, url, plan, title, platform);
+      return streamProgressive(req, res, url, plan, title, platform, selector);
     }
 
     console.log(

@@ -168,6 +168,35 @@ also means the read-only Render mount is never written to.
 | `RAW_ERRORS` | *(off)* | Set to `1` to stop redacting filesystem paths and URL query strings out of error responses. The server log is unredacted either way. |
 | `MAX_QUALITY` | *(off)* | Set to `1` to drop the H.264 preference — highest resolution wins, codec be damned. **This is the setting that produces AV1.** Leave it off unless you know every player you care about handles AV1/VP9; see below. |
 
+### "Requested format is not available"
+
+A format id is a fact about one extraction, not a permanent name. YouTube hands
+different clients different format sets, and the fast path reuses an id from a
+plan that can be five minutes old, so the id can simply be gone by the time the
+download runs.
+
+Three layers now stop that from reaching the visitor, all of them measured:
+
+1. The fast path asks for `<id>/b[ext=mp4]`, so yt-dlp falls back on its own.
+   `b` is a single already-muxed file by definition — the full selector could
+   resolve to a two-stream merge, and piping a merge to stdout produces
+   MPEG-TS wearing an `.mp4` name.
+2. If that still fails **and nothing has been written**, the request is handed
+   to the merge path with the full selector, which can merge, remux, or fall
+   back further. The stale plan is dropped from the cache on the way.
+3. Every video selector ends in `/bv*`, so a video with no audio track at all
+   comes down silent rather than failing. `bv*` is video-bearing, so this
+   cannot bring back the audio-only bug.
+
+Layer 2 depends on a detail worth not undoing: the pipe is created with
+`{ end: false }`. A plain `pipe()` ends the response the moment yt-dlp's stdout
+closes — including when it closes having produced nothing — which commits an
+empty `200` before the exit code is known and leaves nothing to recover from.
+That was a real bug, found by forcing a bad id with the fallback removed: the
+download returned `200` with zero bytes.
+
+The classification for this failure is `format_unavailable`.
+
 ### Errors
 
 Every failure returns the same shape, and the message is the tool's own text
@@ -267,6 +296,15 @@ The sort is a *preference*, not a filter: H.264 wins wherever it exists at any
 resolution, and AV1/VP9 remains available when it's all a site has. Because the
 codec term is prepended it outranks resolution, which is the trade this site
 wants — a 1080p file that plays beats a 4K file that doesn't.
+
+Audio is pinned the same way, for the same reason. `ba[acodec^=mp4a]` comes
+before plain `ba`, because the alternative YouTube offers is Opus, and Opus in
+an MP4 is the audio mirror of the AV1 problem — picture with no sound on the
+same players. It sits in the selector rather than in `-S` because `acodec:aac`
+in the sort also ranks the *video* candidate's audio field: measured, it pulled
+a 4K source down from 1080p avc1 to 360p itag 18. Measured in the selector
+instead, it changed `137+251` (opus) to `137+140` (aac) with identical 1080p
+H.264 video.
 
 If you hit this, check `MAX_QUALITY` first. It removes the codec preference,
 which is exactly how you get a 4K AV1 file that plays as sound only.
