@@ -132,6 +132,56 @@ past it.
 2. `/etc/secrets/cookies.txt` — where Render mounts a Secret File
 3. `server/cookies.txt` — local development
 
+#### Verifying the jar is actually being read
+
+`GET /api/health` reports it, so you don't have to trigger a download and read
+the logs:
+
+```json
+{ "ok": true,
+  "cookies": {
+    "loaded": true,
+    "source": "/etc/secrets/cookies.txt",
+    "entries": 42,
+    "droppedForOtherSites": 310,
+    "perPlatform": { "youtube.com": 12, "tiktok.com": 0, "instagram.com": 0, "facebook.com": 0 },
+    "pathsChecked": [{ "path": "/etc/secrets/cookies.txt", "exists": true, "readable": true, "size": 91204, "error": null }],
+    "secretsDir": ["cookies.txt"] } }
+```
+
+Counts and paths only — never a cookie name or value. `pathsChecked` is
+deliberately **not** redacted, unlike paths in tool errors: the whole question
+is whether `/etc/secrets/cookies.txt` is the file being read, and `…/cookies.txt`
+doesn't answer it.
+
+The same is printed at boot, and every download logs `cookies=N youtube.com`
+next to its routing decision, so you can confirm a session went out with that
+specific request.
+
+`perPlatform` is the number that usually matters. A jar can load fine and still
+contain nothing for the platform you're downloading from — a browser export
+taken from a Google account page has plenty of `.google.com` cookies and no
+`.youtube.com` ones, and yt-dlp will then behave exactly as if no jar were
+passed at all.
+
+#### When YouTube still says "Sign in to confirm you're not a bot"
+
+That message looks identical for five different causes, so the error now says
+which one it is:
+
+| Response says | Cause | Fix |
+|---|---|---|
+| `no cookie jar loaded. Checked: /etc/secrets/cookies.txt (missing); …` | No file at any candidate path | Add the Secret File |
+| `… (exists, UNREADABLE)` | Mounted but permissions deny it | Re-create the Secret File |
+| `cookie file was read but held no entries for this platform` | Wrong export — all cookies are for other sites | Export while on youtube.com |
+| `cookie jar loaded from … but it has no youtube.com entries` | Same, but other supported platforms are present | As above |
+| `cookie jar loaded from … with N youtube.com entries; the session is likely expired` | Everything wired up, cookies stale | Re-export and replace the Secret File |
+
+Check `secretsDir` in the health output too — it lists what is actually mounted.
+A Secret File named `youtube-cookies.txt` shows up there and is picked up
+automatically (any filename containing "cookie" in `/etc/secrets` is tried), but
+seeing the list makes a naming mismatch obvious.
+
 #### On Render: use a Secret File, not the repo
 
 Dashboard → your service → **Environment** → **Secret Files** → **Add Secret

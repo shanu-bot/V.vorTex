@@ -27,6 +27,12 @@ const path = require("path");
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+/* Declared up here rather than beside redact(): boot-time code runs before the
+   error-reporting section further down, and a const in the temporal dead zone
+   throws rather than reading as undefined. See "Error reporting" for what it
+   controls. */
+const RAW_ERRORS = /^(1|true|yes)$/i.test(process.env.RAW_ERRORS || "");
+
 /* --------------------------------------------------------------------------
    Locating the tools
 
@@ -154,36 +160,112 @@ function cookieDomainAllowed(field) {
   return COOKIE_DOMAINS.some((d) => host === d || host.endsWith("." + d));
 }
 
+/* Render's secret mount. Listed by name so a misnamed Secret File shows up as
+   a mismatch rather than as silence -- "you created youtube-cookies.txt, this
+   looks for cookies.txt" is a two-second fix that is otherwise invisible. */
+const SECRETS_DIR = "/etc/secrets";
+
+function listSecretsDir() {
+  try {
+    return fs.readdirSync(SECRETS_DIR);
+  } catch (e) {
+    return e.code === "ENOENT" ? null : []; // null = no such directory at all
+  }
+}
+
 /** Where to look for the jar, most specific first. */
-const COOKIE_PATHS = process.env.COOKIES_FILE
-  ? [process.env.COOKIES_FILE]
-  : [
-      "/etc/secrets/cookies.txt",           // Render Secret File
-      path.join(__dirname, "cookies.txt")   // server/cookies.txt
-    ];
+const COOKIE_PATHS = (() => {
+  if (process.env.COOKIES_FILE) return [process.env.COOKIES_FILE];
+
+  // POSIX-joined, not path.join: this mount only exists on Linux, and showing
+  // a Windows-style "\etc\secrets\..." in a diagnostic is just confusing.
+  const candidates = [`${SECRETS_DIR}/cookies.txt`];
+
+  /* Anything else in the secrets directory that looks like a jar. Covers the
+     Secret File being called cookies.txt.txt, youtube_cookies.txt, or whatever
+     the browser extension named its export. */
+  for (const name of listSecretsDir() || []) {
+    if (/cookie/i.test(name)) {
+      const p = path.join(SECRETS_DIR, name);
+      if (!candidates.includes(p)) candidates.push(p);
+    }
+  }
+
+  candidates.push(path.join(__dirname, "cookies.txt")); // local development
+  return candidates;
+})();
+
+/* --------------------------------------------------------------------------
+   Everything learned while loading the jar, kept so it can be reported.
+
+   "Sign in to confirm you're not a bot" is what a platform says when it sees
+   no session, and from the outside that looks identical whether the file was
+   missing, unreadable, misnamed, full of cookies for other sites, or simply
+   expired. Those are five different fixes, so the loader records which one it
+   was instead of just succeeding or not.
+   -------------------------------------------------------------------------- */
+
+const COOKIE_STATUS = {
+  checked: [],        // [{ path, exists, readable, size, entries, error }]
+  secretsDir: null,   // names in /etc/secrets, or null if there is no such dir
+  source: null,       // where the jar that got used came from
+  entries: 0,         // entries that survived the domain filter
+  dropped: 0,         // entries for sites this server doesn't support
+  byDomain: {},       // surviving entries per allowed domain
+  seenDomains: [],    // domains present in the file, allowed or not (names only)
+  loaded: false
+};
+
+/**
+ * Netscape jars are tab-separated, but plenty of exporters emit spaces and
+ * yt-dlp is lenient about it. Splitting only on tabs would put the whole line
+ * in field 0, fail the domain check, and silently drop every cookie in the
+ * file -- so fall back to any whitespace.
+ */
+function cookieFields(line) {
+  const byTab = line.split("\t");
+  return byTab.length >= 7 ? byTab : line.split(/\s+/);
+}
 
 const COOKIE_FILE = (() => {
+  COOKIE_STATUS.secretsDir = listSecretsDir();
+
   const blobs = [];
 
   for (const p of COOKIE_PATHS) {
-    let text;
+    const record = { path: p, exists: false, readable: false, size: 0, error: null };
     try {
-      text = fs.readFileSync(p, "utf8");
-    } catch {
-      continue; // not mounted here; try the next candidate
-    }
-    if (text.trim()) {
-      console.log(`[cookies] reading ${p}`);
-      blobs.push(text);
-      break; // first jar found wins; the rest are fallbacks, not extras
+      const st = fs.statSync(p);
+      record.exists = true;
+      record.size = st.size;
+      // Readability is its own question: a mounted-but-unreadable secret is a
+      // permissions problem, and it should not look like a missing file.
+      fs.accessSync(p, fs.constants.R_OK);
+      record.readable = true;
+
+      const text = fs.readFileSync(p, "utf8");
+      COOKIE_STATUS.checked.push(record);
+      if (text.trim()) {
+        blobs.push(text);
+        COOKIE_STATUS.source = p;
+        break; // first jar found wins; the rest are fallbacks, not extras
+      }
+      record.error = "file is empty";
+      continue;
+    } catch (e) {
+      record.error = e.code || e.message;
+      COOKIE_STATUS.checked.push(record);
+      continue;
     }
   }
 
   for (const name of ["YTDLP_COOKIES", "IG_COOKIES"]) {
     const raw = (process.env[name] || "").replace(/\\n/g, "\n").trim();
     if (raw) {
-      console.log(`[cookies] reading $${name}`);
       blobs.push(raw);
+      COOKIE_STATUS.source = COOKIE_STATUS.source
+        ? `${COOKIE_STATUS.source} + $${name}`
+        : `$${name}`;
     }
   }
 
@@ -192,6 +274,7 @@ const COOKIE_FILE = (() => {
   let kept = 0;
   let dropped = 0;
   const lines = [];
+  const seen = new Set();
 
   for (const raw of blobs.join("\n").split("\n")) {
     const line = raw.trimEnd();
@@ -204,27 +287,119 @@ const COOKIE_FILE = (() => {
     const entry = line.replace(/^#HttpOnly_/i, "");
     if (entry.startsWith("#")) continue;
 
-    const domain = entry.split("\t")[0];
+    const domain = cookieFields(entry)[0];
     if (!domain) continue;
+    seen.add(domain.replace(/^\./, "").toLowerCase());
 
     if (!cookieDomainAllowed(domain)) { dropped++; continue; }
     kept++;
+    const key = domain.replace(/^\./, "").toLowerCase();
+    COOKIE_STATUS.byDomain[key] = (COOKIE_STATUS.byDomain[key] || 0) + 1;
     lines.push(line);
   }
 
-  if (!kept) {
-    console.error(
-      `[cookies] no entries for ${COOKIE_DOMAINS.slice(0, 4).join(", ")}... ` +
-      `(${dropped} for other sites ignored) -- continuing without a session.`
-    );
-    return null;
-  }
-  console.log(`[cookies] ${kept} entries kept, ${dropped} for unrelated sites dropped`);
+  COOKIE_STATUS.entries = kept;
+  COOKIE_STATUS.dropped = dropped;
+  COOKIE_STATUS.seenDomains = [...seen].sort();
+
+  if (!kept) return null;
 
   // 0600: the container runs as `node`, but don't leave a session readable.
   const file = path.join(os.tmpdir(), "vv-cookies.txt");
   fs.writeFileSync(file, `${COOKIE_HEADER}\n${lines.join("\n")}\n`, { mode: 0o600 });
+  COOKIE_STATUS.loaded = true;
   return file;
+})();
+
+/** The platforms a session actually matters for, and whether one is present. */
+const COOKIE_PLATFORM_DOMAINS = ["youtube.com", "tiktok.com", "instagram.com", "facebook.com"];
+
+function cookiesForDomain(domain) {
+  return Object.entries(COOKIE_STATUS.byDomain)
+    .filter(([d]) => d === domain || d.endsWith("." + domain))
+    .reduce((n, [, c]) => n + c, 0);
+}
+
+/**
+ * A compact, value-free summary. Safe to log, safe to return in an error, and
+ * detailed enough to tell the five failure modes apart.
+ */
+function cookieSummary() {
+  /* These paths are NOT redacted, unlike the ones in tool errors. The question
+     this exists to answer is "is /etc/secrets/cookies.txt being read", and
+     "…/cookies.txt" does not answer it. They are configuration, not secrets --
+     the mount point is documented by Render, and no cookie name or value is
+     ever included here. */
+  return {
+    loaded: COOKIE_STATUS.loaded,
+    source: COOKIE_STATUS.loaded ? COOKIE_STATUS.source : null,
+    entries: COOKIE_STATUS.entries,
+    droppedForOtherSites: COOKIE_STATUS.dropped,
+    perPlatform: Object.fromEntries(
+      COOKIE_PLATFORM_DOMAINS.map((d) => [d, cookiesForDomain(d)])
+    ),
+    pathsChecked: COOKIE_STATUS.checked.map((c) => ({
+      path: c.path,
+      exists: c.exists,
+      readable: c.readable,
+      size: c.size,
+      error: c.error
+    })),
+    secretsDir:
+      COOKIE_STATUS.secretsDir === null
+        ? `${SECRETS_DIR} does not exist (not running on Render, or no Secret Files added)`
+        : COOKIE_STATUS.secretsDir
+  };
+}
+
+/* Printed once at boot, because this is the question that actually gets asked
+   and the logs are where it gets answered. */
+(function reportCookieState() {
+  const s = cookieSummary();
+  console.log("[cookies] ---------------------------------------------");
+  for (const c of COOKIE_STATUS.checked) {
+    console.log(
+      `[cookies] checked ${c.path} -> ` +
+      (c.exists
+        ? `exists, ${c.readable ? "readable" : "NOT READABLE"}, ${c.size} bytes` +
+          (c.error ? ` (${c.error})` : "")
+        : `missing (${c.error || "ENOENT"})`)
+    );
+  }
+  console.log(
+    `[cookies] ${SECRETS_DIR}: ` +
+    (COOKIE_STATUS.secretsDir === null
+      ? "no such directory"
+      : COOKIE_STATUS.secretsDir.length
+        ? COOKIE_STATUS.secretsDir.join(", ")
+        : "(empty)")
+  );
+
+  if (!COOKIE_STATUS.loaded) {
+    if (COOKIE_STATUS.entries === 0 && COOKIE_STATUS.dropped > 0) {
+      console.error(
+        `[cookies] LOADED NOTHING: the file had ${COOKIE_STATUS.dropped} entries but none ` +
+        `for ${COOKIE_PLATFORM_DOMAINS.join(", ")}. Domains present: ` +
+        `${COOKIE_STATUS.seenDomains.slice(0, 12).join(", ")}` +
+        `${COOKIE_STATUS.seenDomains.length > 12 ? ", ..." : ""}`
+      );
+    } else {
+      console.error(
+        "[cookies] NO SESSION LOADED. YouTube will answer bot checks instead of videos. " +
+        `Add a Secret File named cookies.txt (mounts at ${SECRETS_DIR}/cookies.txt), ` +
+        "or set COOKIES_FILE to a path."
+      );
+    }
+    console.log("[cookies] ---------------------------------------------");
+    return;
+  }
+
+  console.log(`[cookies] loaded ${s.entries} entries from ${COOKIE_STATUS.source}`);
+  console.log(`[cookies] per platform: ${JSON.stringify(s.perPlatform)}`);
+  for (const [d, n] of Object.entries(s.perPlatform)) {
+    if (n === 0) console.warn(`[cookies] none for ${d} - downloads from it will be anonymous`);
+  }
+  console.log("[cookies] ---------------------------------------------");
 })();
 
 /* --------------------------------------------------------------------------
@@ -684,7 +859,8 @@ function galleryUrls(url, timeoutMs = 25_000) {
    The unredacted text is always logged server-side regardless.
    -------------------------------------------------------------------------- */
 
-const RAW_ERRORS = /^(1|true|yes)$/i.test(process.env.RAW_ERRORS || "");
+// RAW_ERRORS is declared at the top of the file: the cookie loader redacts
+// paths while reporting itself at boot, which happens before this point.
 
 function redact(text) {
   if (RAW_ERRORS) return text;
@@ -750,19 +926,47 @@ function toolError(stderr, tool = "yt-dlp") {
     ? redact(lines.slice(-3).join(" "))
     : `${tool} failed without reporting a reason (it may have been killed by the timeout).`;
 
-  /* The one thing the tool cannot tell you, because it doesn't know: whether
-     this server was even given a session. An auth failure reads completely
-     differently depending on the answer, and it's the first thing to check. */
-  if (!COOKIE_FILE && ["bot_check", "login_required", "http_403", "http_401", "cookies"].includes(code)) {
-    // Plain ASCII on purpose: this string ends up in logs and consoles whose
-    // encoding is not always UTF-8, and a mangled em-dash reads like a bug.
-    message += " [server has no cookie jar loaded - see COOKIES_FILE / Render Secret Files]";
+  /* The one thing the tool cannot tell you, because it doesn't know: what this
+     server did about a session. "Sign in to confirm you're not a bot" looks
+     identical whether the file was missing, unreadable, misnamed, full of
+     cookies for other sites, or expired -- five different fixes. So an
+     auth-shaped failure carries the loader's own findings, and the caller gets
+     the paths that were checked rather than a guess.
+
+     Plain ASCII in these strings on purpose: they end up in logs and consoles
+     whose encoding is not always UTF-8, and a mangled em-dash reads like a bug. */
+  const authShaped = ["bot_check", "login_required", "http_403", "http_401", "cookies"].includes(code);
+  let cookies;
+
+  if (authShaped) {
+    cookies = cookieSummary();
+    if (!COOKIE_STATUS.loaded) {
+      const tried = COOKIE_STATUS.checked.length
+        ? COOKIE_STATUS.checked
+            .map((c) => `${c.path} (${c.exists ? (c.readable ? "exists" : "exists, UNREADABLE") : "missing"})`)
+            .join("; ")
+        : "no candidate paths";
+      message +=
+        COOKIE_STATUS.dropped > 0
+          ? ` [cookie file was read but held no entries for this platform: ` +
+            `${COOKIE_STATUS.dropped} entries, all for other sites]`
+          : ` [no cookie jar loaded. Checked: ${tried}]`;
+    } else {
+      const platform = COOKIE_PLATFORM_DOMAINS.find((d) => new RegExp(d.split(".")[0], "i").test(stderr || ""));
+      const n = platform ? cookiesForDomain(platform) : null;
+      message +=
+        n === 0
+          ? ` [cookie jar loaded from ${COOKIE_STATUS.source} but it has no ${platform} entries]`
+          : ` [cookie jar loaded from ${COOKIE_STATUS.source}` +
+            `${n ? ` with ${n} ${platform} entries` : ""}; the session is likely expired]`;
+    }
   }
 
   return {
     error: message,
     code,
-    detail: redact(String(stderr || "").trim()) || null
+    detail: redact(String(stderr || "").trim()) || null,
+    ...(cookies ? { cookies } : {})
   };
 }
 
@@ -809,7 +1013,10 @@ app.use(cors({
   methods: ["GET"]
 }));
 
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
+/* Health carries the cookie state so "is the Secret File actually being read?"
+   can be answered without triggering a download and reading the logs. Counts
+   and paths only -- never a cookie name or value. */
+app.get("/api/health", (_req, res) => res.json({ ok: true, cookies: cookieSummary() }));
 
 /* --------------------------------------------------------------------------
    GET /api/info -- metadata for the result panel
@@ -1342,14 +1549,24 @@ app.get("/api/download", rateLimit, async (req, res) => {
       plan.ext === "mp4" &&
       plan.vcodec && plan.vcodec !== "none";
 
+    /* Whether a session is going out with this request, on the same line as
+       the routing decision. "Is yt-dlp actually loading the cookies file" is
+       the question that gets asked when a platform starts refusing, and this
+       answers it per download rather than only at boot. */
+    const domain = PLATFORMS[platform].hosts[0];
+    const cookieNote = COOKIE_FILE
+      ? `cookies=${cookiesForDomain(domain)} ${domain}`
+      : "cookies=none";
+
     if (canStream) {
-      console.log(`[${platform}] streaming ${plan.formatId} (${plan.vcodec}) — no merge needed`);
+      console.log(`[${platform}] streaming ${plan.formatId} (${plan.vcodec}) — no merge needed, ${cookieNote}`);
       return streamProgressive(req, res, url, plan, title, platform, selector);
     }
 
     console.log(
       `[${platform}] merging ${plan ? plan.formatId : "?"} — ` +
-      (plan ? `${plan.needsMerge ? "two streams" : `ext=${plan.ext}`}` : "no plan")
+      (plan ? `${plan.needsMerge ? "two streams" : `ext=${plan.ext}`}` : "no plan") +
+      `, ${cookieNote}`
     );
     return streamMerged(req, res, url, selector, platform);
   }
