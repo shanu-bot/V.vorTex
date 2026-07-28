@@ -42,7 +42,13 @@ WORKDIR /app
 # Copy manifests first so `docker build` reuses the npm layer when only
 # server.js changes. `npm ci` (not `install`) installs the exact versions in
 # package-lock.json, so a deploy months from now builds what was tested today.
+#
+# scripts/ has to come along: package.json's postinstall runs it, so npm ci
+# fails outright if it isn't there. It costs nothing here -- the script checks
+# PATH, finds the yt-dlp and ffmpeg installed above, and exits without
+# downloading anything. It only does real work on a non-container host.
 COPY package.json package-lock.json ./
+COPY scripts ./scripts
 RUN npm ci --omit=dev --no-audit --no-fund
 
 COPY server.js ./

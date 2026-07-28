@@ -26,13 +26,49 @@ const path = require("path");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
-const YTDLP = process.env.YTDLP_PATH || "yt-dlp";
-const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
-// yt-dlp finds ffmpeg on PATH by itself; only point it somewhere else if this
-// deployment has, in which case the merge must use the same binary the MP3
-// route does. Passing a bare "ffmpeg" here would be read as a path and fail.
-const FFMPEG_LOCATION = process.env.FFMPEG_PATH || null;
-const GALLERYDL = process.env.GALLERYDL_PATH || "gallery-dl";
+
+/* --------------------------------------------------------------------------
+   Locating the tools
+
+   Three places, in order: an explicit env var, the bin/ directory that
+   scripts/install-tools.js fills in at `npm install` time, then bare PATH.
+
+   The middle one is what makes a non-container deploy work. Render's native
+   Node runtime has no yt-dlp and no ffmpeg and no root to apt-get them with,
+   so postinstall drops static builds into server/bin/ -- but nothing adds that
+   directory to PATH, so spawn() would still get ENOENT. Resolving from
+   __dirname rather than the working directory keeps it correct no matter where
+   the process was started from.
+
+   In the container bin/ doesn't exist (the install script sees both tools on
+   PATH and skips), so this falls through to PATH and nothing changes.
+   -------------------------------------------------------------------------- */
+
+const BIN_DIR = path.join(__dirname, "bin");
+
+function resolveTool(envVar, name) {
+  if (process.env[envVar]) return process.env[envVar];
+  const bundled = path.join(BIN_DIR, name);
+  try {
+    fs.accessSync(bundled, fs.constants.X_OK);
+    return bundled;
+  } catch {
+    return name; // let PATH answer it
+  }
+}
+
+const YTDLP = resolveTool("YTDLP_PATH", "yt-dlp");
+const FFMPEG = resolveTool("FFMPEG_PATH", "ffmpeg");
+const GALLERYDL = resolveTool("GALLERYDL_PATH", "gallery-dl");
+
+/* yt-dlp finds ffmpeg on PATH by itself, so it only needs telling when the
+   binary is somewhere PATH won't look -- which is exactly the bin/ case above.
+   Passing a bare "ffmpeg" here would be read as a path and fail, so only pass
+   it when resolveTool returned an actual path.
+
+   The containing directory rather than the binary: yt-dlp wants ffprobe as well
+   as ffmpeg, and handing it the directory is what lets it find both. */
+const FFMPEG_LOCATION = FFMPEG.includes(path.sep) ? path.dirname(FFMPEG) : null;
 
 /* --------------------------------------------------------------------------
    IG_COOKIES -- optional, and the difference between the photo route working

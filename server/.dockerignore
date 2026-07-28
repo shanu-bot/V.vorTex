@@ -4,3 +4,7 @@ node_modules
 npm-debug.log
 .env
 README.md
+
+# Host-fetched static binaries. The image apt-installs its own, and a Linux
+# build from a Mac or Windows checkout would be the wrong architecture anyway.
+bin

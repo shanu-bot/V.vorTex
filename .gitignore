@@ -24,3 +24,8 @@ dist/
 build/
 *.log
 tmp/
+
+# Static yt-dlp / ffmpeg binaries fetched by server/scripts/install-tools.js at
+# install time. Tens of MB, platform-specific, and reproducible from the pinned
+# versions in that script — so they're built, not committed.
+server/bin/
