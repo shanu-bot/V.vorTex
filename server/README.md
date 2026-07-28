@@ -225,18 +225,36 @@ different clients different format sets, and the fast path reuses an id from a
 plan that can be five minutes old, so the id can simply be gone by the time the
 download runs.
 
-Three layers now stop that from reaching the visitor, all of them measured:
+**No format id is ever requested.** The plan decides *whether* a download can
+be streamed; choosing the format is left to yt-dlp. Four layers, all measured:
 
-1. The fast path asks for `<id>/b[ext=mp4]`, so yt-dlp falls back on its own.
-   `b` is a single already-muxed file by definition — the full selector could
-   resolve to a two-stream merge, and piping a merge to stdout produces
-   MPEG-TS wearing an `.mp4` name.
-2. If that still fails **and nothing has been written**, the request is handed
-   to the merge path with the full selector, which can merge, remux, or fall
-   back further. The stale plan is dropped from the cache on the way.
-3. Every video selector ends in `/bv*`, so a video with no audio track at all
+1. The fast path asks for `b[ext=mp4]` — what it actually requires, one
+   already-muxed MP4. `b` is single-format by definition; the full selector
+   could resolve to a two-stream merge, and piping a merge to stdout produces
+   MPEG-TS wearing an `.mp4` name. There is deliberately no `/b` fallback to
+   any container: an unexpected `.webm` served as `video/mp4` would be a lie.
+2. If that fails **and nothing has been written**, the request goes to the
+   merge path with the full selector, which can merge and remux. The stale
+   plan is dropped from the cache on the way.
+3. If the merge path's own selector cannot be satisfied, it retries **without
+   `-f` at all** and lets yt-dlp choose. yt-dlp's default is `bv*+ba/b`, so it
+   resolves whenever the video has any format, and `-S vcodec:h264` still
+   applies so H.264 is still preferred. There is no third attempt: if the
+   default cannot be satisfied, the video genuinely has nothing to download.
+4. Every video selector ends in `/bv*`, so a video with no audio track at all
    comes down silent rather than failing. `bv*` is video-bearing, so this
    cannot bring back the audio-only bug.
+
+The metadata call needed the same treatment, and this was the second source of
+the error. Passing `-f` to `-J` is what buys the download plan, but it also
+makes the dump fail outright when the selector cannot be satisfied:
+`yt-dlp -J -f <bad>` exits 1 with *"Requested format is not available"* where a
+bare `-J` on the same video exits 0. A speed-up must never be the reason
+something fails, so that call now retries without the selector and simply loses
+the plan, falling back to the merge route.
+
+Verified by replacing the `hd` selector with a deliberately impossible one:
+both retries fire, and the download still returns 200 with H.264 + AAC.
 
 Layer 2 depends on a detail worth not undoing: the pipe is created with
 `{ end: false }`. A plain `pipe()` ends the response the moment yt-dlp's stdout

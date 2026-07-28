@@ -668,8 +668,35 @@ function downloadPlan(info) {
   };
 }
 
-/** Run yt-dlp and buffer stdout. Used for metadata only, never for the video. */
+/**
+ * Metadata, with the format selector treated as an optimisation rather than a
+ * requirement.
+ *
+ * Passing -f to -J is what buys the download plan, but it also makes the dump
+ * fail outright when the selector cannot be satisfied: `yt-dlp -J -f <bad>`
+ * exits 1 with "Requested format is not available", where a bare -J on the
+ * same video exits 0. That turned a format quirk into a dead /api/info and a
+ * dead download, which is the wrong trade -- the plan is a speed-up, and a
+ * speed-up must never be the reason something fails.
+ *
+ * So: ask with the selector, and if the answer is specifically "that selector
+ * isn't available", ask again without it. The caller gets metadata either way;
+ * it just loses the plan and falls back to the merge route, which can satisfy
+ * anything.
+ */
 function ytdlpJson(url, timeoutMs = 25_000, selector = null) {
+  return ytdlpJsonOnce(url, timeoutMs, selector).catch((err) => {
+    if (!selector || err.code !== "format_unavailable") throw err;
+    console.warn(
+      `[ytdlp] selector "${selector}" is not satisfiable for this video; ` +
+      "re-reading metadata without it (download will take the merge route)"
+    );
+    return ytdlpJsonOnce(url, timeoutMs, null);
+  });
+}
+
+/** One attempt. Buffers stdout; used for metadata only, never for the video. */
+function ytdlpJsonOnce(url, timeoutMs = 25_000, selector = null) {
   return new Promise((resolve, reject) => {
     // Metadata is login-walled on exactly the same posts the media is, so this
     // needs the session as much as the download does -- without it /api/info
@@ -1104,7 +1131,7 @@ app.get("/api/info", rateLimit, async (req, res) => {
  * /tmp is ephemeral anyway. The alternative (buffer in RAM) would not survive
  * a 512MB box.
  */
-async function streamMerged(req, res, url, format, platform) {
+async function streamMerged(req, res, url, format, platform, allowRetry = true) {
   let dir;
   try {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "vh-mux-"));
@@ -1128,8 +1155,14 @@ async function streamMerged(req, res, url, format, platform) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* already gone */ }
   };
 
-  const args = [
-    "-f", format,
+  /* A null selector means "let yt-dlp choose", which is what the retry below
+     falls back to. Its default is bv*+ba/b, so it resolves whenever the video
+     has any format at all -- and -S still applies, so H.264 is still preferred.
+     There is no third attempt: if yt-dlp's own default cannot be satisfied,
+     the video genuinely has nothing to download. */
+  const args = [];
+  if (format) args.push("-f", format);
+  args.push(
     // The merge target. --remux-video covers the other half: when the selector
     // falls through to a single progressive stream there is nothing to merge,
     // and this is what turns a lone .webm into the .mp4 we promised.
@@ -1143,7 +1176,7 @@ async function streamMerged(req, res, url, format, platform) {
     "--no-playlist",
     "--no-part",
     "--socket-timeout", "15"
-  ];
+  );
   // Codec preference, applied to every branch of the selector at once. See the
   // format-selection note above for why this is a sort and not a filter.
   if (FORMAT_SORT) args.push("-S", FORMAT_SORT);
@@ -1188,6 +1221,19 @@ async function streamMerged(req, res, url, format, platform) {
       // the internet's.
       console.error(`[${platform}] yt-dlp exit ${code} (merge path):\n${err.trim()}`);
       cleanup();
+
+      /* Last resort, and the one that makes "never fail because a format is
+         missing" true rather than aspirational: if this selector could not be
+         satisfied, drop it and let yt-dlp pick. Nothing has been written yet
+         -- headers on this path are only set once the file is complete -- so
+         the retry is invisible to the visitor. */
+      if (allowRetry && format && classifyError(err) === "format_unavailable" && !res.headersSent) {
+        console.warn(
+          `[${platform}] selector "${format}" not satisfiable; retrying with yt-dlp's own choice`
+        );
+        return streamMerged(req, res, url, null, platform, false);
+      }
+
       if (!res.headersSent) res.status(502).json(toolError(err, "yt-dlp"));
       return;
     }
@@ -1301,23 +1347,23 @@ function streamProgressive(req, res, url, plan, title, platform, selector) {
 
   const jar = cookieSession();
 
-  /* The plan's exact format id, then a fallback.
-     A format id is a fact about one extraction, not a permanent name: YouTube
-     hands different clients different format sets, and the plan can be up to
-     five minutes old, so by the time this runs the id may simply not exist --
-     "Requested format is not available", and a download that fails for a
-     reason the visitor cannot act on.
+  /* No format id here, deliberately. A format id is a fact about one
+     extraction, not a permanent name: YouTube hands different clients
+     different format sets, and the plan can be five minutes old, so naming an
+     id is a standing invitation to "Requested format is not available" for a
+     reason no visitor can act on. The plan's job is to decide *whether* this
+     can be streamed; picking the format is yt-dlp's job.
 
-     `b[ext=mp4]` is the fallback rather than the full selector because this
-     path pipes to stdout: `b` is a single already-muxed file by definition,
-     where the full selector could resolve to a two-stream merge, and piping a
-     merge produces MPEG-TS wearing an .mp4 name. The sort still applies, so
-     the fallback prefers H.264 exactly like the primary path.
+     `b[ext=mp4]` says what this path actually requires: one already-muxed MP4.
+     `b` is single-format by definition -- the full selector could resolve to a
+     two-stream merge, and piping a merge to stdout produces MPEG-TS wearing an
+     .mp4 name. `-S vcodec:h264` still applies, so H.264 wins where it exists.
 
-     If even that misses, the close handler re-routes to the merge path, which
-     can satisfy any selector. */
+     There is deliberately no `/b` fallback to any container: an unexpected
+     .webm streamed out as video/mp4 would be a lie. If no muxed MP4 exists,
+     the close handler re-routes to the merge path, which can remux one. */
   const args = [
-    "-f", `${plan.formatId}/b[ext=mp4]`,
+    "-f", "b[ext=mp4]",
     "--no-playlist",
     "--concurrent-fragments", "8",
     "--socket-timeout", "15"
