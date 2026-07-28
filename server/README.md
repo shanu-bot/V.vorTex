@@ -113,8 +113,9 @@ script no-ops. Worth doing when convenient, but not urgent.
 | `YTDLP_PATH` | `server/bin/yt-dlp`, else PATH | Only needed if it's somewhere else. |
 | `FFMPEG_PATH` | `server/bin/ffmpeg`, else PATH | Required, not optional — every video download merges a separate video and audio stream into the MP4, and `mp3` transcodes with it. Passed to yt-dlp as `--ffmpeg-location` whenever it resolves to a path. |
 | `SKIP_TOOL_INSTALL` | *(unset)* | Set to skip the `postinstall` binary fetch entirely — for when you install yt-dlp and ffmpeg yourself. It already no-ops off Linux and whenever both are on PATH (which is what happens in the Docker build). |
-| `YTDLP_COOKIES` | *(unset)* | A Netscape `cookies.txt`, pasted whole, for **any** site yt-dlp touches. This is what gets past a platform's bot check — see below. Escaped `\n` accepted, since host env fields are single-line. |
-| `IG_COOKIES` | *(unset)* | The same thing, kept under its old name because it predates `YTDLP_COOKIES` and is already set on deployed services. Both are merged into one jar; which var you paste into makes no difference to routing. |
+| `COOKIES_FILE` | *(see below)* | Path to a Netscape `cookies.txt`. Overrides the search order. |
+| `COOKIE_DOMAINS` | *(unset)* | Comma-separated extra domains allowed into the jar, on top of the four platforms. |
+| `YTDLP_COOKIES` / `IG_COOKIES` | *(unset)* | The jar pasted into an env var instead of a file. Still works, merged in after the file, escaped `\n` accepted — but a full jar is far past what an env var should hold. Prefer the file. |
 
 ### Cookies, and why downloads fail without them
 
@@ -123,24 +124,46 @@ laptop these links resolve anonymously; from Render they get a bot check
 instead. YouTube's is the one you'll hit first — *"Sign in to confirm you're
 not a bot"* — which the API reports as **"That video is private or needs a
 login."** on a video that is plainly public. A logged-in session is what gets
-past it, and both env vars above are how you supply one.
+past it.
 
-Export a `cookies.txt` from a logged-in browser session and paste the whole
-file in. A jar is domain-scoped and yt-dlp only offers each site its own
-entries, so one jar can safely carry YouTube, Instagram and Facebook at once —
-an Instagram session is never sent to YouTube.
+**The jar is read from a file**, first match wins:
 
-Two things to expect:
+1. `$COOKIES_FILE`
+2. `/etc/secrets/cookies.txt` — where Render mounts a Secret File
+3. `server/cookies.txt` — local development
 
-- **Use burner accounts.** Requests come from a datacenter IP and accounts do
-  get banned for it.
-- **Sessions expire**, typically in weeks, and faster for YouTube from cloud
-  IPs. When downloads start failing with the login message again, re-export
-  and re-paste. There is no way around this from inside the server.
+#### On Render: use a Secret File, not the repo
+
+Dashboard → your service → **Environment** → **Secret Files** → **Add Secret
+File**. Filename `cookies.txt`, contents = your exported jar. Render mounts it
+read-only at `/etc/secrets/cookies.txt`, which the server already looks for.
+Nothing touches git, and the value is editable without a code change.
+
+#### Never commit the file
+
+> A `cookies.txt` is a password that skips 2FA, and **this repo is public**.
+> Anyone who reads a committed jar is signed in as you everywhere in it, and
+> deleting the file later does not help — git keeps every version. `cookies.txt`
+> is in `.gitignore` and `.dockerignore`; leave it there. If one is ever
+> committed, treat every account in it as compromised and sign out of all
+> sessions before rewriting history.
+
+**Only the four platforms' cookies are loaded.** A browser export is everything
+you're logged into — email, bank, source control. On startup the jar is filtered
+down to `youtube.com`, `tiktok.com`, `instagram.com`, `facebook.com` and their
+CDNs; every other entry is dropped before anything is written, and the count is
+logged. Google's own domains are excluded on purpose: yt-dlp needs
+`youtube.com` cookies, and `.google.com` holds the master account session.
+Even so, export from a **burner account** — requests come from a datacenter IP
+and accounts do get banned for it.
+
+**Sessions expire**, typically in weeks and faster for YouTube from cloud IPs.
+When downloads start failing with the login message again, re-export and
+replace the Secret File. There is no way around this from inside the server.
 
 Cookies are never read from the master jar directly: yt-dlp and gallery-dl both
-*rewrite* the file they're handed, so every run gets a disposable copy and the
-configured session can't be clobbered by a concurrent download.
+*rewrite* the file they're handed, so every run gets a disposable copy — which
+also means the read-only Render mount is never written to.
 | `MAX_QUALITY` | *(off)* | Set to `1` for pure `bv*+ba/b` — highest resolution wins, codec be damned. Off by default, which prefers H.264+AAC so the file opens on anything; the trade is that YouTube publishes no H.264 above 1080p, so a 4K upload arrives as 1080p. |
 
 ## Maintenance — the part people skip

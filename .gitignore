@@ -8,6 +8,13 @@ yarn-error.log*
 .env.*
 !.env.example
 
+# Cookie jars. A Netscape cookies.txt is a password that skips 2FA, and this
+# repo is public -- committing one hands over every account in it. In
+# production the file comes from a Render Secret File, never from git.
+cookies.txt
+*cookies.txt
+server/cookies.txt
+
 # OS noise
 Thumbs.db
 ehthumbs.db

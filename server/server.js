@@ -74,53 +74,133 @@ const FFMPEG_LOCATION = FFMPEG.includes(path.sep) ? path.dirname(FFMPEG) : null;
    Cookies -- optional, and increasingly the difference between this working
    and not.
 
-   Two env vars, both holding the contents of a Netscape cookies.txt exported
-   from a logged-in session:
+   Platforms serve datacenter IPs a bot check rather than the video (YouTube's
+   "Sign in to confirm you're not a bot" is the one you'll hit first), and a
+   logged-in session is what gets past it.
 
-     YTDLP_COOKIES -- any site yt-dlp touches. This is the one that matters for
-       video. Platforms serve datacenter IPs a bot check rather than the video
-       (YouTube's "Sign in to confirm you're not a bot" is the one you'll hit
-       first), and a session is what gets past it.
-     IG_COOKIES    -- Instagram, kept under its old name because it predates
-       the general jar and is already set on deployed services.
+   The session comes from a file, in this order:
 
-   Both are merged into one file. That's safe because a cookies.txt is
-   domain-scoped and yt-dlp only sends the entries matching the host it's
-   fetching -- an Instagram session in the jar is simply not offered to
-   YouTube. So the split is about where you pasted it, not about routing.
+     1. $COOKIES_FILE          -- an explicit path, if you set one.
+     2. /etc/secrets/cookies.txt -- where Render mounts a Secret File. This is
+        the one to use in production: the dashboard holds the contents, nothing
+        touches the repo, and the mount is read-only.
+     3. server/cookies.txt     -- for local development.
 
-   Env vars usually can't hold real newlines, so escaped ones are accepted too.
-   0600: the container runs as `node`, but don't leave a session readable.
+   A pasted env var still works ($YTDLP_COOKIES / $IG_COOKIES, escaped \n
+   accepted) and is merged in after the file, but a full jar is far past what
+   an env var should hold -- hence the file.
 
-   Use burner accounts. This fires from a datacenter IP, which every one of
-   these platforms treats as an automation signal, and accounts get banned for
-   it. Sessions also expire -- expect to re-paste every few weeks.
+   NEVER COMMIT THE FILE. A cookies.txt is a password that skips 2FA, and this
+   repo is public. It is in .gitignore and .dockerignore; leave it there.
    -------------------------------------------------------------------------- */
 
 /** Netscape jars must open with this magic line or the parser rejects them. */
 const COOKIE_HEADER = "# Netscape HTTP Cookie File";
 const COOKIE_HEADER_RE = /^#\s*(?:Netscape|HTTP)\s+.*Cookie File/i;
 
+/* --------------------------------------------------------------------------
+   Only these domains survive into the jar this server actually uses.
+
+   A browser export is everything you are logged into -- bank, email, source
+   control -- and this process hands the jar to a subprocess that talks to the
+   internet. yt-dlp is domain-scoped and wouldn't send your GitHub session to
+   YouTube, but "the tool is careful" is a thin reason to keep the entries
+   around at all. So the jar gets cut down to the four platforms this server
+   supports, and everything else is dropped before anything is written.
+
+   Google's own domains are deliberately absent: youtube.com cookies are what
+   yt-dlp needs, and .google.com holds the master account session.
+
+   COOKIE_DOMAINS (comma-separated) extends the list if a platform ever needs
+   another host.
+   -------------------------------------------------------------------------- */
+
+const COOKIE_DOMAINS = [
+  "youtube.com", "youtu.be", "youtube-nocookie.com",
+  "tiktok.com",
+  "instagram.com",
+  "facebook.com", "fb.watch", "fb.com",
+  "cdninstagram.com", "fbcdn.net",
+  ...(process.env.COOKIE_DOMAINS || "")
+    .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+];
+
+/** Same exact-suffix match classify() uses -- `evilyoutube.com` must not pass. */
+function cookieDomainAllowed(field) {
+  const host = String(field).replace(/^\./, "").toLowerCase();
+  return COOKIE_DOMAINS.some((d) => host === d || host.endsWith("." + d));
+}
+
+/** Where to look for the jar, most specific first. */
+const COOKIE_PATHS = process.env.COOKIES_FILE
+  ? [process.env.COOKIES_FILE]
+  : [
+      "/etc/secrets/cookies.txt",           // Render Secret File
+      path.join(__dirname, "cookies.txt")   // server/cookies.txt
+    ];
+
 const COOKIE_FILE = (() => {
-  const blobs = [process.env.YTDLP_COOKIES, process.env.IG_COOKIES]
-    .map((s) => (s || "").replace(/\\n/g, "\n").trim())
-    .filter(Boolean);
+  const blobs = [];
+
+  for (const p of COOKIE_PATHS) {
+    let text;
+    try {
+      text = fs.readFileSync(p, "utf8");
+    } catch {
+      continue; // not mounted here; try the next candidate
+    }
+    if (text.trim()) {
+      console.log(`[cookies] reading ${p}`);
+      blobs.push(text);
+      break; // first jar found wins; the rest are fallbacks, not extras
+    }
+  }
+
+  for (const name of ["YTDLP_COOKIES", "IG_COOKIES"]) {
+    const raw = (process.env[name] || "").replace(/\\n/g, "\n").trim();
+    if (raw) {
+      console.log(`[cookies] reading $${name}`);
+      blobs.push(raw);
+    }
+  }
 
   if (!blobs.length) return null;
 
-  // Each blob carries its own magic line; the merged file needs exactly one,
-  // at the top. Everything else -- comments included -- passes through, since
-  // the parser skips them anyway.
-  const body = blobs
-    .join("\n")
-    .split("\n")
-    .map((l) => l.trimEnd())
-    .filter((l) => !COOKIE_HEADER_RE.test(l))
-    .join("\n")
-    .trim();
+  let kept = 0;
+  let dropped = 0;
+  const lines = [];
 
+  for (const raw of blobs.join("\n").split("\n")) {
+    const line = raw.trimEnd();
+    if (!line) continue;
+    if (COOKIE_HEADER_RE.test(line)) continue; // one header, added below
+
+    // `#HttpOnly_` is a real entry wearing a comment's clothes, so it has to be
+    // tested before comments are skipped -- and stripped before the domain is
+    // read, or every httpOnly cookie would fail the allowlist and be dropped.
+    const entry = line.replace(/^#HttpOnly_/i, "");
+    if (entry.startsWith("#")) continue;
+
+    const domain = entry.split("\t")[0];
+    if (!domain) continue;
+
+    if (!cookieDomainAllowed(domain)) { dropped++; continue; }
+    kept++;
+    lines.push(line);
+  }
+
+  if (!kept) {
+    console.error(
+      `[cookies] no entries for ${COOKIE_DOMAINS.slice(0, 4).join(", ")}... ` +
+      `(${dropped} for other sites ignored) -- continuing without a session.`
+    );
+    return null;
+  }
+  console.log(`[cookies] ${kept} entries kept, ${dropped} for unrelated sites dropped`);
+
+  // 0600: the container runs as `node`, but don't leave a session readable.
   const file = path.join(os.tmpdir(), "vv-cookies.txt");
-  fs.writeFileSync(file, `${COOKIE_HEADER}\n${body}\n`, { mode: 0o600 });
+  fs.writeFileSync(file, `${COOKIE_HEADER}\n${lines.join("\n")}\n`, { mode: 0o600 });
   return file;
 })();
 

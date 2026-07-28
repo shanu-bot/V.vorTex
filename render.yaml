@@ -31,29 +31,31 @@ services:
       - key: ALLOWED_ORIGINS
         sync: false
 
-      # Netscape cookies.txt from a logged-in session, pasted whole. Escaped \n
-      # are accepted, since Render's field is single-line.
+      # Cookies do NOT go here — they come from a Secret File.
       #
-      # This one covers video, on every platform, and without it most links
-      # fail here even though they work from a laptop: Render's IPs are
-      # datacenter IPs, and the platforms serve those a bot check rather than
-      # the video. YouTube's shows up as "That video is private or needs a
-      # login" on a video that is plainly public.
+      # Without a logged-in session most links fail on Render even though they
+      # work from a laptop: these are datacenter IPs, and the platforms serve
+      # those a bot check rather than the video. YouTube's shows up as "That
+      # video is private or needs a login" on a video that is plainly public.
+      # Instagram serves no photo media to logged-out clients at all.
       #
-      # A jar is domain-scoped, so one export can carry YouTube, Instagram and
-      # Facebook at once — each site is only ever offered its own entries.
-      - key: YTDLP_COOKIES
-        sync: false
-
-      # The same thing under its older, Instagram-specific name. Kept because
-      # deployed services already set it; both are merged into one jar.
+      # Blueprints can't declare Secret Files, so this part is manual and only
+      # needs doing once:
       #
-      # Instagram serves no photo media to logged-out clients at all, so the
-      # photo route needs a session even from a residential IP.
+      #   Dashboard -> this service -> Environment -> Secret Files -> Add
+      #   Filename: cookies.txt
+      #   Contents: a Netscape cookies.txt exported from a logged-in browser
       #
-      # Use burner accounts. These run from a datacenter IP, which every
+      # Render mounts it read-only at /etc/secrets/cookies.txt, which server.js
+      # already looks for. Nothing touches the repo — which matters, because a
+      # cookies.txt is a password that skips 2FA and this repo is public.
+      #
+      # Only youtube/tiktok/instagram/facebook entries are loaded; the server
+      # drops everything else in the export before using it. Even so, use a
+      # burner account: these requests come from a datacenter IP, which every
       # platform reads as automation, and accounts can be banned for it.
-      # Sessions also expire after a few weeks, at which point downloads start
-      # failing with the login message until you paste a fresh export.
-      - key: IG_COOKIES
-        sync: false
+      # Sessions expire after a few weeks, at which point downloads start
+      # failing with the login message until you replace the Secret File.
+      #
+      # YTDLP_COOKIES / IG_COOKIES still work as an env-var fallback, but a
+      # full jar is far past what an env var should hold.

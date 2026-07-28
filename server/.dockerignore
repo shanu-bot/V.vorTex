@@ -8,3 +8,9 @@ README.md
 # Host-fetched static binaries. The image apt-installs its own, and a Linux
 # build from a Mac or Windows checkout would be the wrong architecture anyway.
 bin
+
+# Cookie jars never get baked into an image -- a layer is forever, and anyone
+# who can pull the image can read it. The container gets its jar at runtime
+# from a mounted secret.
+cookies.txt
+*cookies.txt
