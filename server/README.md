@@ -508,6 +508,47 @@ holds a socket and a temp file open indefinitely, which on a 512 MB box is how
 a service ends up wedged after a handful of slow posts. Verified after a full
 regression run: no orphaned `yt-dlp` processes.
 
+### Which tool goes first on Instagram
+
+For `instagram.com/p/`, **gallery-dl runs first and yt-dlp may not run at all.**
+
+The two used to run concurrently, with yt-dlp's failure forgiven when it said
+"no video". That forgave the common case and not the real one. yt-dlp is asked
+*with* a format selector; an image post answers "Requested format is not
+available"; `ytdlpJson()` then retries **without** the selector. So a photo post
+cost two yt-dlp spawns against a rate-limited Instagram before gallery-dl's
+answer was even looked at — and if either spawn hit the 90 s ceiling, the error
+was a `timeout`, nothing forgave it, and the request failed with the photos
+already sitting in the other promise. That is the
+
+```
+[gallery-dl] 1 item(s): photo          ← gallery-dl succeeded
+ERROR: [Instagram] No video formats found   ← and the request failed anyway
+```
+
+pair in the logs.
+
+Asking the tool that can actually see the post first makes that impossible
+rather than handled:
+
+```
+/p/  →  gallery-dl
+         ├─ items, none of them video  →  answer now. yt-dlp is never spawned.
+         ├─ items including a video    →  yt-dlp for title/duration/quality/plan
+         └─ nothing (missing, failed)  →  yt-dlp, exactly as before
+```
+
+Everything else is untouched and spawns no gallery-dl at all: `/reel/`,
+`/reels/`, `/stories/`, TikTok, Facebook, YouTube.
+
+**The cost, stated plainly:** a `/p/` post that *does* hold video now waits for
+gallery-dl (~4 s measured) before yt-dlp starts, where the two used to overlap.
+That is the price of never failing a photo post, and it falls only on `/p/`.
+
+A side benefit: the cancellation machinery is gone. gallery-dl is awaited
+before anything can fail, so no caller ever walks away from a running process —
+the abandoned-process problem stopped existing rather than being handled.
+
 ### "No video formats found!" on an Instagram post
 
 yt-dlp has two ways of saying a post holds no video, and which one you get

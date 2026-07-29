@@ -1571,31 +1571,14 @@ function parseGalleryItems(jsonText) {
   return items;
 }
 
-/**
- * Cancellation for a gallery-dl run that nobody is waiting for any more.
- *
- * The images are fetched concurrently with the yt-dlp extraction, so when that
- * extraction fails the request answers immediately -- and would leave
- * gallery-dl running against Instagram for the rest of its budget, holding a
- * connection to the platform that is already rate-limiting us. Its own timeout
- * would eventually reap it, but "eventually" is the wrong answer for a process
- * whose result is already known to be unwanted.
- */
-function abortGallery(ctl) {
-  if (!ctl || ctl.cancelled) return;
-  ctl.cancelled = true;
-  const child = ctl.child;
-  if (child && child.exitCode === null && child.signalCode === null) {
-    console.log("[gallery-dl] cancelled: the request it belonged to has already failed");
-    child.kill("SIGKILL");
-  }
-}
+/* Run gallery-dl, buffer stdout, kill it if it outstays its budget.
 
-/** Run gallery-dl, buffer stdout, kill it if it outstays its budget. */
-function spawnGallery(url, args, timeoutMs, label, ctl = {}) {
+   There is no cancellation path any more, and that is not an omission: this is
+   now awaited before yt-dlp is spawned, so no caller ever walks away from a
+   running gallery-dl. The abandoned-process problem stopped existing rather
+   than being handled. */
+function spawnGallery(url, args, timeoutMs, label) {
   return new Promise((resolve, reject) => {
-    if (ctl.cancelled) return reject(Object.assign(new Error("cancelled"), { code: "cancelled" }));
-
     const jar = cookieSession("instagram");
     const final = [...args, ...jar.args, url]; // array + no shell: never a command
     const started = Date.now();
@@ -1603,7 +1586,6 @@ function spawnGallery(url, args, timeoutMs, label, ctl = {}) {
     console.log(`[gallery-dl:${label}] ${GALLERYDL} ${final.join(" ")}`);
 
     const child = spawn(GALLERYDL, final);
-    ctl.child = child;   // so abortGallery() can reach it
 
     let out = "";
     let err = "";
@@ -1663,7 +1645,7 @@ function spawnGallery(url, args, timeoutMs, label, ctl = {}) {
  * "the carousel only shows videos" is otherwise indistinguishable from
  * "the carousel only has videos".
  */
-async function galleryItems(url, timeoutMs = GALLERYDL_TIMEOUT_MS, ctl = {}) {
+async function galleryItems(url, timeoutMs = GALLERYDL_TIMEOUT_MS) {
   if (!IG_PHOTO_POST_RE.test(String(url))) return [];   // reels never come here
   if (!GALLERYDL_STATUS.available) {
     console.warn(`[gallery-dl] not installed (${GALLERYDL_STATUS.reason}); images unavailable for ${url}`);
@@ -1681,7 +1663,7 @@ async function galleryItems(url, timeoutMs = GALLERYDL_TIMEOUT_MS, ctl = {}) {
   }
 
   try {
-    const raw = await spawnGallery(url, ["--dump-json", "--quiet"], timeoutMs, "dump-json", ctl);
+    const raw = await spawnGallery(url, ["--dump-json", "--quiet"], timeoutMs, "dump-json");
     const items = parseGalleryItems(raw).filter((it) => isAllowedMedia(it.url));
     if (items.length) {
       console.log(`[gallery-dl] ${items.length} item(s) for ${url}: ${items.map((i) => i.type).join(", ")}`);
@@ -1697,7 +1679,7 @@ async function galleryItems(url, timeoutMs = GALLERYDL_TIMEOUT_MS, ctl = {}) {
      difference between a photo post working and not. It gets what is left of
      the budget, halved, so the fallback cannot double the wait. */
   try {
-    const raw = await spawnGallery(url, ["-g", "--quiet"], Math.max(10_000, Math.floor(timeoutMs / 2)), "urls", ctl);
+    const raw = await spawnGallery(url, ["-g", "--quiet"], Math.max(10_000, Math.floor(timeoutMs / 2)), "urls");
     const urls = raw.split("\n").map((s) => s.trim()).filter(Boolean).filter(isAllowedMedia);
     if (!urls.length) {
       console.warn(`[gallery-dl] -g returned nothing usable for ${url}`);
@@ -1996,6 +1978,41 @@ app.get("/api/health", (_req, res) => res.json({
   galleryDl: { ...GALLERYDL_STATUS, timeoutMs: GALLERYDL_TIMEOUT_MS, usedFor: "instagram.com/p/ only" }
 }));
 
+/**
+ * The /api/info body for a post served out of gallery-dl.
+ *
+ * One builder, two callers -- the photos-only fast path and the fallback for
+ * when yt-dlp declines a post gallery-dl could read. They must not drift:
+ * the frontend keys off `kind` to decide between one video button and one
+ * button per item, and `count` is how many it draws.
+ *
+ * `kind: "photo"` even for a carousel that contains a video, because that is
+ * the value the result panel has always understood as "render the items". The
+ * per-item `type` inside `items[]` is where a video is identified, and that is
+ * what labels the button.
+ */
+function photoPostResponse(items, url, platform) {
+  const photoCount = items.filter((it) => it.type === "photo").length;
+  const videoCount = items.length - photoCount;
+
+  return {
+    kind: "photo",
+    platform,
+    platformName: PLATFORMS[platform].name,
+    title: items.length > 1
+      ? `${PLATFORMS[platform].name} carousel`
+      : `${PLATFORMS[platform].name} ${items[0]?.type === "video" ? "video" : "photo"}`,
+    count: items.length,
+    quality: items.length > 1 ? `${items.length} items` : "Original",
+    size: null,        // the CDN reports it per-item; not worth 10 HEAD requests
+    duration: null,    // gallery-dl does not report one, and a photo has none
+    thumbnail: items[0]?.thumbnail || items[0]?.url || null,
+    photoCount,
+    videoCount,
+    ...describePost(items, url, platform)
+  };
+}
+
 /* --------------------------------------------------------------------------
    GET /api/info -- metadata for the result panel
    -------------------------------------------------------------------------- */
@@ -2015,23 +2032,51 @@ app.get("/api/info", rateLimit, async (req, res) => {
      enter this branch and keep --no-playlist exactly as before. */
   const wantsItems = platform === "instagram" && IG_POST_RE.test(String(url));
 
-  /* The images. Started here rather than awaited here so it overlaps the yt-dlp
-     extraction instead of following it -- both are network round-trips and
-     Instagram is the platform that can least afford them in series.
-
-     Only instagram.com/p/ ever gets this far: galleryItems() returns [] for
-     everything else, so a reel spawns nothing, and TikTok, Facebook and
-     YouTube never reach this line at all.
-
-     .catch() belts the braces. galleryItems() already swallows everything, but
-     this promise is not awaited on every path out of the handler, and an
-     unhandled rejection takes the process down on modern Node. */
-  const galleryCtl = {};
-  const photosPromise = wantsItems
-    ? galleryItems(url, GALLERYDL_TIMEOUT_MS, galleryCtl).catch(() => [])
-    : Promise.resolve([]);
+  /* An instagram.com/p/ link: the only shape that can hold images, and so the
+     only one that asks gallery-dl anything. */
+  const isPhotoPost = platform === "instagram" && IG_PHOTO_POST_RE.test(String(url));
 
   try {
+    /* ---------------------------------------------------------------------
+       gallery-dl first, for /p/ only.
+
+       These two ran concurrently before, with yt-dlp's failure forgiven when
+       it said "no video". That forgave the common case and not the real one:
+       yt-dlp is asked with a format selector, an image post answers
+       "Requested format is not available", and ytdlpJson() then retries
+       *without* the selector -- so a photo post costs two yt-dlp spawns
+       against a rate-limited Instagram before gallery-dl's answer is even
+       looked at. If either spawn hits the 90s ceiling the error is a timeout
+       rather than a no-video, nothing forgives it, and the request fails with
+       the photos already sitting in the other promise. That is the
+       "[gallery-dl] 1 item(s): photo" line next to a failed /api/info.
+
+       Asking the tool that can actually see the post first makes the failure
+       impossible rather than handled: a photo post now answers from gallery-dl
+       and yt-dlp is never spawned at all.
+
+       The cost is honest and small: a /p/ post that does hold video now waits
+       for gallery-dl (~4s measured) before yt-dlp starts, where it used to
+       overlap them. Reels, stories, TikTok, Facebook and YouTube do not enter
+       this branch and are untouched -- no extra process, no extra wait. */
+    let items = [];
+    if (isPhotoPost) {
+      items = await galleryItems(url).catch(() => []);
+
+      const videoItems = items.filter((it) => it.type === "video").length;
+      console.log(
+        `[${platform}] gallery-dl first for ${url}: ${items.length} item(s), ` +
+        `${videoItems} video`
+      );
+
+      /* Photos only. Answer from gallery-dl and stop -- there is nothing for
+         yt-dlp to add to a post with no video in it, and asking would only
+         spend Instagram's patience to be told so. */
+      if (items.length && !videoItems) {
+        return res.json(photoPostResponse(items, url, platform));
+      }
+    }
+
     let info = null;
     let ytdlpError = null;
     try {
@@ -2042,9 +2087,9 @@ app.get("/api/info", rateLimit, async (req, res) => {
       info = await ytdlpJson(url, timeoutFor(platform), FORMATS.hd, extractOpts(platform, wantsItems));
       rememberPlan(url, FORMATS.hd, info);
     } catch (err) {
-      /* "No video here" is not a failure on Instagram -- the post parsed, the
-         session worked, it simply holds images, and for a /p/ URL that is the
-         hand-off to gallery-dl already running beside this.
+      /* Still reachable, and still worth forgiving: gallery-dl can report a
+         video item that yt-dlp then refuses to extract, and a /p/ post whose
+         images gallery-dl missed entirely lands here too.
 
          Instagram-only, and the guard is load-bearing rather than tidiness:
          "No video formats found" is a *YouTube* string too, where it means a
@@ -2056,31 +2101,18 @@ app.get("/api/info", rateLimit, async (req, res) => {
       ytdlpError = err;
       console.log(
         `[${platform}] yt-dlp found no video in ${url} (${err.code || "no_video"}); ` +
-        "handing over to gallery-dl for the images"
+        `falling back to gallery-dl's ${items.length} item(s)`
       );
     }
 
-    /* Images win the item list when there are any.
+    /* gallery-dl's list wins where it has one: it sees every node in a post
+       and yt-dlp sees only the video ones, so on a mixed carousel yt-dlp's
+       list is a strict subset and taking it would silently drop the photos.
+       Where gallery-dl has nothing -- a reel, or a /p/ post it could not read
+       -- yt-dlp's entries are what is left and the post still shows its
+       videos. */
+    if (!items.length && wantsItems && info) items = instagramItems(info);
 
-       gallery-dl sees every node in a post; yt-dlp sees only the video ones.
-       So on a mixed carousel yt-dlp's list is a strict subset, and taking it
-       would silently drop the photos -- which is the bug this exists to fix.
-       When gallery-dl found nothing (not installed, timed out, failed), the
-       yt-dlp list is what is left and the post still shows its videos. */
-    const photos = await photosPromise;
-    const items = photos.length ? photos : (wantsItems && info ? instagramItems(info) : []);
-    const itemSource = photos.length ? "gallery-dl" : "yt-dlp";
-
-    if (wantsItems) {
-      console.log(
-        `[${platform}] ${url}: ${items.length} item(s) from ${itemSource}` +
-        (photos.length && info ? ` (yt-dlp saw ${instagramItems(info).length} video item(s))` : "")
-      );
-    }
-
-    /* An image-only post: yt-dlp declined and gallery-dl is all there is. This
-       is the shape the photo route has always returned, so a client that
-       handled photo posts before handles this one unchanged. */
     if (!info) {
       if (!items.length) {
         console.warn(`[${platform}] no video and no images recoverable for ${url}`);
@@ -2092,24 +2124,7 @@ app.get("/api/info", rateLimit, async (req, res) => {
           detail: ytdlpError?.detail || null
         });
       }
-
-      const shape = describePost(items, url, platform);
-      const photoCount = items.filter((i) => i.type === "photo").length;
-      return res.json({
-        kind: "photo",
-        platform,
-        platformName: PLATFORMS[platform].name,
-        title: items.length > 1
-          ? `${PLATFORMS[platform].name} carousel`
-          : `${PLATFORMS[platform].name} photo`,
-        count: items.length,
-        quality: items.length > 1 ? `${items.length} items` : "Original",
-        size: null,      // the CDN reports it per-image; not worth 10 HEAD requests
-        duration: null,
-        thumbnail: items[0].thumbnail || items[0].url,
-        photoCount,
-        ...shape
-      });
+      return res.json(photoPostResponse(items, url, platform));
     }
 
     // Prefer a real reported size; fall back to yt-dlp's estimate.
@@ -2138,10 +2153,10 @@ app.get("/api/info", rateLimit, async (req, res) => {
       ...shape
     });
   } catch (err) {
-    /* The answer is already known, so nothing is waiting on the images any
-       more -- and leaving gallery-dl running would hold a connection open to
-       the platform that is already refusing us. */
-    abortGallery(galleryCtl);
+    /* No gallery-dl to cancel here any more: it is awaited before yt-dlp is
+       spawned, so by the time anything can fail it has already finished. That
+       is what the ordering bought -- the abandoned-process problem stopped
+       existing rather than being handled. */
     console.error(`[${platform}] /api/info failed (${err.code || "?"}): ${err.stderr || err.message}`);
     res.status(502).json(extractionFailure(err, platform));
   }
@@ -2923,6 +2938,7 @@ module.exports = {
   parseGalleryItems,
   isAllowedMedia,
   saysNoVideo,
+  photoPostResponse,
   IG_PHOTO_POST_RE,
   classifyPostType,
   itemTypeFrom,
