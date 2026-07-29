@@ -508,6 +508,52 @@ holds a socket and a temp file open indefinitely, which on a 512 MB box is how
 a service ends up wedged after a handful of slow posts. Verified after a full
 regression run: no orphaned `yt-dlp` processes.
 
+### "No video formats found!" on an Instagram post
+
+yt-dlp has two ways of saying a post holds no video, and which one you get
+depends on how far its extractor got:
+
+```
+ERROR: [Instagram] …: There is no video in this post     ← recognised, image nodes only
+ERROR: [Instagram] …: No video formats found!            ← info dict built, format list empty
+```
+
+Only the first used to be matched, so a post reporting the second threw out of
+`/api/info` as a hard failure — **discarding the gallery-dl result that was
+already in flight beside it**. The images were sitting right there and the
+request 502'd anyway.
+
+Both now route to gallery-dl, via `saysNoVideo()`, which also accepts the
+`no_formats` classification directly.
+
+Two things deliberately excluded:
+
+- **"Requested format is not available"** is a selector problem on a post that
+  *does* have video. `ytdlpJson()` already retries it without the selector;
+  treating it as "no video" would route a good video post to the photo
+  extractor, which cannot serve it.
+- **Every platform but Instagram.** "No video formats found" is a *YouTube*
+  string too, where it means a player client was refused a PO token — see
+  *"Sign in to confirm you're not a bot"*. All three call sites are guarded on
+  `platform === "instagram"`, so a YouTube failure keeps its own error path and
+  its own player-client fallback rather than being answered with "that post
+  holds no video, and its images could not be read".
+
+The routing that results:
+
+| URL | Route |
+|---|---|
+| `/reel/`, `/reels/`, `/stories/` | yt-dlp only — never spawns gallery-dl |
+| `/p/` with video | yt-dlp for the video; gallery-dl enumerates the items |
+| `/p/` with images | yt-dlp declines → gallery-dl serves the photos |
+| TikTok, Facebook, YouTube | yt-dlp only, unchanged |
+
+`/api/download?format=hd` on an image post is covered too. It arrives via a
+stale link or a direct call rather than the UI — the result panel hides the HD
+button for a photo post — and used to spawn yt-dlp a second time only to fail
+with the same "no video formats", returning a 502 for a post whose images were
+available. It now hands off to the item route at index 0.
+
 ### Instagram post shape
 
 A `/p/` link can be one video or a carousel of several, and `--no-playlist`

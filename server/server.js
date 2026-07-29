@@ -1390,8 +1390,29 @@ function ytdlpJsonOnce(url, timeoutMs = DEFAULT_TIMEOUT_MS, selector = null, opt
    different platform -- it is the end of the line and returns a clear error.
    -------------------------------------------------------------------------- */
 
-/** yt-dlp's exact words when a post parsed fine but holds only images. */
-const NO_VIDEO_RE = /there is no video in this post/i;
+/* yt-dlp has more than one way of saying "this post holds no video", and which
+   one you get depends on how far the extractor got:
+
+     "There is no video in this post"   the extractor recognised the post and
+                                        found only image nodes
+     "No video formats found!"          it produced an info dict with an empty
+                                        format list, which is what an image
+                                        post looks like from the format layer
+
+   Matching only the first was a real bug: an image post that reported the
+   second threw out of /api/info as a hard failure, discarding the gallery-dl
+   result that was already in flight beside it. Both mean the same thing to
+   this server -- hand over to gallery-dl -- so both are matched here.
+
+   Deliberately not included: "Requested format is not available". That is a
+   selector problem on a post that does have video, and ytdlpJson() already
+   retries it without the selector; treating it as "no video" would route a
+   perfectly good video post to the photo extractor. */
+const NO_VIDEO_RE = /there is no video in this post|no video formats found|no video could be found in this post/i;
+
+/** True when yt-dlp is saying "no video here", however it phrased it. */
+const saysNoVideo = (err) =>
+  NO_VIDEO_RE.test(err?.stderr || "") || err?.code === "no_formats";
 
 /* --------------------------------------------------------------------------
    Where photo media is allowed to come from.
@@ -2021,12 +2042,22 @@ app.get("/api/info", rateLimit, async (req, res) => {
       info = await ytdlpJson(url, timeoutFor(platform), FORMATS.hd, extractOpts(platform, wantsItems));
       rememberPlan(url, FORMATS.hd, info);
     } catch (err) {
-      /* "There is no video in this post" is not a failure -- the post parsed,
-         the session worked, it simply holds images. For an /p/ URL that is the
-         hand-off to gallery-dl below. Anything else is a real error. */
-      if (!NO_VIDEO_RE.test(err.stderr || "")) throw err;
+      /* "No video here" is not a failure on Instagram -- the post parsed, the
+         session worked, it simply holds images, and for a /p/ URL that is the
+         hand-off to gallery-dl already running beside this.
+
+         Instagram-only, and the guard is load-bearing rather than tidiness:
+         "No video formats found" is a *YouTube* string too, where it means a
+         player client was refused a PO token. Letting that through here would
+         answer a YouTube failure with "that post holds no video, and its
+         images could not be read", which is both wrong and unactionable.
+         TikTok, Facebook and YouTube keep the error path they had. */
+      if (!(platform === "instagram" && saysNoVideo(err))) throw err;
       ytdlpError = err;
-      console.log(`[${platform}] no video in ${url}; waiting on gallery-dl for images`);
+      console.log(
+        `[${platform}] yt-dlp found no video in ${url} (${err.code || "no_video"}); ` +
+        "handing over to gallery-dl for the images"
+      );
     }
 
     /* Images win the item list when there are any.
@@ -2501,7 +2532,9 @@ async function streamItem(req, res, url, index, platform) {
         rememberPlan(url, FORMATS.hd, info);
       }
     } catch (err) {
-      if (NO_VIDEO_RE.test(err.stderr || "")) {
+      // Instagram-only for the same reason as /api/info: "No video formats
+      // found" means something different on YouTube.
+      if (platform === "instagram" && saysNoVideo(err)) {
         console.warn(`[${platform}] no video in ${url} and no images from gallery-dl`);
         return res.status(GALLERYDL_STATUS.available ? 502 : 501).json({
           error: GALLERYDL_STATUS.available
@@ -2684,8 +2717,26 @@ app.get("/api/download", rateLimit, async (req, res) => {
     try {
       info = await ytdlpJson(url, timeoutFor(platform), selector, extractOpts(platform));
       rememberPlan(url, selector, info);
-    } catch {
-      // Non-fatal: a generic filename and the safe route beat failing outright.
+    } catch (err) {
+      /* An image post asked for as a video. It reaches here through a stale
+         link or a direct call rather than the UI -- the result panel hides the
+         HD button for a photo post -- but running the merge path anyway means
+         yt-dlp is spawned a second time only to fail with the same "no video
+         formats" it just gave, and the visitor gets a 502 for a post whose
+         images are sitting right there.
+
+         So route it the way the post itself is shaped: hand off to the item
+         route, which asks gallery-dl. Index 0, because a bare ?format=hd names
+         no item and the first is the one the post leads with. */
+      if (platform === "instagram" && IG_PHOTO_POST_RE.test(String(url)) && saysNoVideo(err)) {
+        console.log(
+          `[${platform}] ${format} requested for a post with no video (${err.code || "no_video"}); ` +
+          "routing to the item path for gallery-dl"
+        );
+        return streamItem(req, res, url, 0, platform);
+      }
+      // Otherwise non-fatal: a generic filename and the safe route beat
+      // failing outright, and the merge path can still satisfy plenty.
     }
   }
 
@@ -2871,6 +2922,7 @@ module.exports = {
   instagramItems,
   parseGalleryItems,
   isAllowedMedia,
+  saysNoVideo,
   IG_PHOTO_POST_RE,
   classifyPostType,
   itemTypeFrom,
