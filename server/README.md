@@ -248,14 +248,48 @@ and accounts do get banned for it.
 When downloads start failing with the login message again, re-export and
 replace the Secret File. There is no way around this from inside the server.
 
-Cookies are never read from the master jar directly: yt-dlp and gallery-dl both
-*rewrite* the file they're handed, so every run gets a disposable copy — which
-also means the read-only Render mount is never written to.
+#### A separate jar for Instagram
+
+The shared jar is one file for all four platforms, which is fine until one of
+them expires. YouTube sessions die within days from a datacenter IP,
+Instagram's last far longer — so a routine YouTube refresh means re-exporting
+Instagram's perfectly good session too, and can take Instagram down with it.
+
+So Instagram gets an optional file of its own. Add a second Render Secret File
+named **`instagram_cookies.txt`** (or set `INSTAGRAM_COOKIES_FILE`), and:
+
+- Instagram requests use it — both yt-dlp *and* gallery-dl are handed the same
+  file, so photo and video paths share one session.
+- Nothing else uses it. TikTok, Facebook and YouTube keep the shared jar.
+- If it is absent, Instagram falls back to the shared jar and behaves exactly
+  as it did before. Nothing breaks by not adding it.
+
+It is filtered harder than the shared jar — only `instagram.com`,
+`cdninstagram.com`, `facebook.com` and `fbcdn.net` survive — because that is
+all the file is for, so an over-broad export leaks nothing extra into the one
+process that talks to Instagram.
+
+`GET /api/health` reports it under `cookies.instagram`:
+
+```json
+{ "dedicatedFile": true, "source": "/etc/secrets/instagram_cookies.txt",
+  "entries": 12, "usingSharedJar": false }
+```
+
+Cookies are never read from the master jar directly: yt-dlp *rewrites* the file
+it is handed, so every run gets a disposable copy — which also means the
+read-only Render mount is never written to.
 | `FFPROBE_PATH` | `server/bin/ffprobe`, else PATH | Used to confirm the finished file actually has a video track. If it can't run, the check is skipped rather than failing the download. |
 | `RAW_ERRORS` | *(off)* | Set to `1` to stop redacting filesystem paths and URL query strings out of error responses. The server log is unredacted either way. |
 | `YTDLP_JS_RUNTIME` | `node:<process.execPath>` | JS runtime for YouTube's challenge. `off` disables the flag; any other value is passed to `--js-runtimes` verbatim. See below. |
 | `YTDLP_VERBOSE` | *(off)* | Set to `1` to add `--verbose` to every yt-dlp run and log a pre-flight block: whether the jar exists, its size, whether `--cookies` was passed, the full command, and the first 15 lines of verbose output. Noisy — for debugging, not production. Never prints cookie contents. |
 | `MAX_QUALITY` | *(off)* | Set to `1` to drop the H.264 preference — highest resolution wins, codec be damned. **This is the setting that produces AV1.** Leave it off unless you know every player you care about handles AV1/VP9; see below. |
+| `IG_TIMEOUT_MS` | `90000` | Instagram's extraction budget. Instagram only — every other platform stays at 25 s. Raise it if Render's egress is slow; see *Instagram timeouts*. |
+| `IG_SOCKET_TIMEOUT` | `45` | Instagram's `--socket-timeout`, in seconds. Instagram only — every other platform stays at 15 s. |
+| `YOUTUBE_PLAYER_CLIENT` | `web_embedded` | The player client YouTube requests fall back to when the session is refused. Set to `off` to disable the fallback. See *"Sign in to confirm you're not a bot"*. |
+| `INSTAGRAM_COOKIES_FILE` | `/etc/secrets/instagram_cookies.txt`, else `server/instagram_cookies.txt` | An Instagram-only jar. When present, Instagram uses it and nothing else does; when absent, Instagram falls back to the shared jar. See below. |
+| `GALLERYDL_PATH` | `server/bin/gallery-dl`, else PATH | gallery-dl, used for `instagram.com/p/` photo posts and nothing else. |
+| `GALLERYDL_TIMEOUT_MS` | `45000` | gallery-dl's own budget, deliberately well inside `IG_TIMEOUT_MS` so it can never be what makes a request time out. |
 
 ### "Requested format is not available"
 
@@ -304,54 +338,191 @@ download returned `200` with zero bytes.
 
 The classification for this failure is `format_unavailable`.
 
-### "spawn gallery-dl ENOENT"
+### "Sign in to confirm you're not a bot"
 
-The command name is right — `gallery-dl` is the real binary. The problem is
-that it genuinely isn't installed.
-
-**It cannot be replaced by yt-dlp.** yt-dlp is video-only; an Instagram image
-post makes it exit with *"There is no video in this post"*, which is the string
-`NO_VIDEO_RE` matches on to hand over to the photo route. Dropping gallery-dl
-means dropping photo and carousel support entirely, not moving it elsewhere.
-
-**It also can't be installed the way yt-dlp and ffmpeg are.** Those publish
-static binaries; gallery-dl publishes none — every release from v1.32.3 to
-v1.32.8 carries zero assets, and `/releases/download/v1.32.6/gallery-dl.bin` is
-a 404. It's a Python package and has to be installed as one.
-
-So `scripts/install-tools.js` now installs it into a venv, mirroring what the
-Dockerfile has always done. A venv rather than `pip install --user` because
-Debian and Ubuntu mark the system Python externally-managed (PEP 668), which
-makes a bare pip refuse to run. `bin/gallery-dl` is symlinked to the venv entry
-point — a copy would break, since pip generates a script whose shebang points
-back into the venv.
-
-**Failure there is never fatal.** No Python on the host means no gallery-dl,
-which means no photo posts — and video downloads on all four platforms are
-completely unaffected, so the deploy should not fail over it. The installer
-warns and continues.
-
-The server probes gallery-dl once at boot and reports it:
+With the cookies **loaded and sent**:
 
 ```
-[gallery-dl] 1.32.6 at /opt/render/project/src/server/bin/gallery-dl - photo posts supported
-[gallery-dl] NOT AVAILABLE (ENOENT for "gallery-dl"). Instagram photo and carousel
-             posts will fail with a clear error; video downloads on all platforms
-             are unaffected. Fix: redeploy so postinstall installs it, or set GALLERYDL_PATH.
+ERROR: [youtube] h0b4CqY5mrY: Sign in to confirm you're not a bot.
+[cookie jar loaded from /etc/secrets/cookies.txt with 12 youtube.com entries, the session is likely expired]
 ```
 
-`GET /api/health` carries the same under `galleryDl`. When it's missing, photo
-requests return `code: "gallerydl_missing"` with a sentence saying so, instead
-of spawning a binary already known to be absent and surfacing a raw `ENOENT`.
+That sentence in brackets is this server's, and it is the useful half: the jar
+is fine, the session inside it is dead. YouTube invalidates a browser session
+used from a datacenter IP within days. Nothing here can prevent that.
+
+**Re-exporting is the real fix, and the step everyone misses is the last one:**
+
+1. Private/incognito window, log into a **burner** account (these get banned).
+2. Open a video, let it play a second.
+3. Export with a Netscape-format cookie extension.
+4. **Close the window without logging out** — logging out invalidates the
+   session server-side, killing the file you just saved.
+5. Replace the Render Secret File, redeploy, confirm on `/api/health` that
+   `cookies.perPlatform["youtube.com"]` is non-zero.
+
+**The fallback, for when that expires again.** yt-dlp talks to YouTube as one
+of several *player clients*, and they are not equally gated. Measured against
+2026.07.04 with **no cookies at all**:
+
+| Client | Cookie-free result |
+|---|---|
+| `web`, `web_safari`, `ios` | no formats at all — these want a PO token |
+| `tv_simply`, `android`, `mweb` | 360p ceiling |
+| **`web_embedded`** | 2160p offered; **downloaded 1080p H.264 + AAC** |
+
+So when YouTube refuses — `bot_check`, `login_required`, `http_401/403`,
+`cookies`, or `no_formats` — the request is retried **once** as
+`web_embedded`. Cookies still lead, because a working session is strictly more
+capable (private and age-gated videos exist). The fallback fires only after a
+refusal, only on YouTube, and only once; `YOUTUBE_PLAYER_CLIENT=off` disables
+it.
+
+`no_formats` is in that list because it isn't an error shape, it's a refusal
+shape: a client without a PO token gets a player response with the formats
+stripped out rather than a "no". It reads like a broken video and is really
+"this client may not have this".
+
+If the fallback succeeds, the dump is tagged with the client that produced it
+and **the download is made as the same client** — a format list is a fact about
+one client, so downloading as a different one shops from the wrong catalogue.
+The tag rides through the plan cache; the log line says `client=web_embedded`.
+
+**Verified:** the 1080p H.264 + AAC cookie-free download above, and 29 unit
+tests over the gate (fires for the six refusal codes, never for `timeout` /
+`network` / `unavailable` / `geo_blocked` / `format_unavailable` /
+`extractor_error`, never for TikTok, Facebook or Instagram, never twice).
+**Not verified:** the retry firing against a live bot check — that needs a
+datacenter IP with a dead session, which cannot be reproduced on demand.
+
+If it still fails on Render, the two remaining options are a PO-token provider
+plugin (`bgutil-ytdlp-pot-provider`, needs a sidecar process) or routing
+YouTube through a residential proxy.
+
+### Instagram timeouts
+
+The symptom on Render was `[instagram] --dump-json failed (timeout)` followed
+by *"Timed out reading that post"*, while TikTok and Facebook worked fine.
+
+**The cause was doing the work twice.** Every Instagram post ran two
+extractors: yt-dlp for the video, and gallery-dl for the post's item list.
+Two logins, two sets of network round-trips, on the platform least tolerant of
+either — and both had to finish inside a 25 s budget that was tuned for a
+single TikTok video. gallery-dl is the one that got SIGKILLed (`exit null` in
+the logs is this server's own timeout, not a crash).
+
+**The fix was scope, not removal.** gallery-dl is the only thing that can
+read an Instagram photo, so removing it removes photo posts. What it could not
+be was unconditional. It now runs for **instagram.com/p/ URLs only** — the only
+ones that can hold images — and is fenced three ways:
+
+- **By URL.** Reels, stories, TikTok, Facebook and YouTube never spawn it.
+  `galleryItems()` returns `[]` for anything that is not `/p/`, before any
+  process starts.
+- **By budget.** Its own `GALLERYDL_TIMEOUT_MS` (45 s), well inside
+  Instagram's 90 s ceiling, so a slow gallery-dl can never be the thing that
+  makes a request time out.
+- **By consequence.** Its result is optional everywhere. Missing, slow or
+  failing, the request falls back to what yt-dlp found and the post still shows
+  its videos.
+
+And when the yt-dlp extraction fails, the gallery-dl running alongside it is
+**killed immediately** rather than left to its own timeout — nothing is waiting
+on it, and it would otherwise hold a connection open to the platform that is
+already refusing us.
+
+Alongside that scoping, the budgets changed:
+
+| | Instagram | TikTok / Facebook / YouTube |
+|---|---|---|
+| Extraction budget | **90 s** (`IG_TIMEOUT_MS`) | 25 s, unchanged |
+| `--socket-timeout` | **45 s** (`IG_SOCKET_TIMEOUT`) | 15 s, unchanged |
+| `--extractor-retries` | **1** | yt-dlp's default (3), unchanged |
+| Retry on failure | **once**, transient codes only | never, unchanged |
+| gallery-dl | `/p/` URLs only | never |
+
+The `--extractor-retries` cap looks backwards and isn't. yt-dlp's default is
+three internal attempts with a growing sleep between them, so a slow post spent
+the entire budget inside one process that was then killed with nothing to show.
+Capping it means an attempt reports back while budget remains, and the retry —
+a **fresh process with fresh connections**, which is the kind that actually
+succeeds — gets the rest.
+
+Only `timeout`, `network` and `rate_limited` are retried. Auth, format and
+"no video" failures are answers, not accidents; repeating them just doubles the
+wait before you see the same message.
+
+**Cookies get named in the message.** Instagram doesn't refuse an anonymous
+request from a datacenter IP, it *stalls* it — so a missing or expired jar
+reads as a timeout and sends you hunting for a network problem. A timeout on
+Instagram now appends either
+
+> `[No instagram.com cookies are loaded, so this request was anonymous. …]`
+
+or
+
+> `[12 instagram.com cookies were sent from /etc/secrets/cookies.txt. If this keeps happening the session has most likely expired…]`
+
+and carries the full `cookies` block from `/api/health`.
+
+**What each tool is for**, since the split is the whole design:
+
+| | yt-dlp | gallery-dl |
+|---|---|---|
+| TikTok, Facebook, YouTube | yes | never |
+| Instagram reels and stories | yes | never |
+| Instagram `/p/` videos | yes | enumerates them |
+| Instagram `/p/` photos | **cannot** | yes |
+
+yt-dlp's Instagram extractor skips non-video nodes, so on a mixed carousel its
+item list is a strict *subset* of the post. That is why gallery-dl's list wins
+when it returns one: taking yt-dlp's would silently drop the photos, which is
+the bug this exists to fix. When gallery-dl returns nothing, yt-dlp's list is
+what is left and the post still shows its videos.
+
+#### Logging
+
+Every yt-dlp invocation logs its full command line — not just under
+`YTDLP_VERBOSE`, because "which flags actually went out" is the first question
+asked of any failure here. Each extraction adds its budget, its attempt number
+and its duration:
+
+```
+[ytdlp:instagram:metadata] /opt/render/project/src/server/bin/yt-dlp -J --playlist-end 20 --socket-timeout 45 …
+[instagram] extract attempt 1: timeout 90000ms, socket 45s, playlist, cookies=yes
+[instagram] extract attempt 1 timed out in 90003ms
+[instagram] attempt 1 failed (timeout: Timed out after 90000ms reading that link.); retrying once
+[instagram] extract attempt 2: timeout 90000ms, socket 45s, playlist, cookies=yes
+[instagram] extract attempt 2 ok in 4210ms
+```
+
+Nothing prints a cookie name or value; the jar appears only as a path to a
+per-run temp copy.
+
+#### Process cleanup
+
+Every exit from an extraction — success, failure, timeout, or a spawn that
+never started — goes through one `finish()` that logs the duration once, kills
+the child if it is still alive, and drops the cookie copy. An abandoned yt-dlp
+holds a socket and a temp file open indefinitely, which on a 512 MB box is how
+a service ends up wedged after a handful of slow posts. Verified after a full
+regression run: no orphaned `yt-dlp` processes.
 
 ### Instagram post shape
 
-A `/p/` link can be one photo, one video, or a carousel mixing both, and until
-recently this server could only see the first of those properly — yt-dlp with
-`--no-playlist` returns one video and says nothing about its siblings, and the
-gallery-dl fallback treated every URL it got back as a photo.
+A `/p/` link can be one video or a carousel of several, and `--no-playlist`
+made the server blind to the difference — it returns whichever item yt-dlp
+picked and says nothing about its siblings.
 
-For `/p/`, `/reel/`, `/reels/` and `/stories/` URLs, `/api/info` now adds two
+Dropping `--no-playlist` **for Instagram post URLs only** settles it without a
+second tool. A carousel comes back as `_type: "playlist"` with one `entries`
+element per item, each carrying its own `vcodec`, `ext` and `thumbnail`; a
+single post has no entries and describes itself. Both shapes go through the
+same reader, so the post structure is a free by-product of the extraction
+`/api/info` already performs. TikTok, Facebook and YouTube keep
+`--no-playlist` exactly as before.
+
+For `/p/`, `/reel/`, `/reels/` and `/stories/` URLs, `/api/info` adds two
 keys:
 
 ```json
@@ -359,6 +530,7 @@ keys:
   "kind": "carousel",
   "postType": "carousel",
   "itemCount": 3,
+  "photoCount": 2,
   "items": [
     { "index": 0, "type": "photo", "download": "/api/download?url=…&format=photo&i=0", "thumbnail": "https://…/1_n.jpg" },
     { "index": 1, "type": "video", "download": "/api/download?url=…&format=photo&i=1", "thumbnail": "https://…/poster_n.jpg" },
@@ -367,31 +539,48 @@ keys:
 }
 ```
 
-`postType` is `single_photo`, `single_video` or `carousel`.
+`postType` is `single_photo`, `single_video` or `carousel`. Where the types
+come from depends on which tool produced the list: gallery-dl's `typename` /
+`video_url` / `display_url` (`display_url` is the still frame *even for videos*,
+which is how a carousel gets a thumbnail for an item that is not a photo), or
+yt-dlp's `vcodec` — the literal string `"none"` for a stream with no video
+track — falling back to the extension and then the URL.
 
 **Additive.** Every field that existed before still means what it meant, so a
-client ignoring these two keys behaves exactly as it did. `kind` only gains a
-new value — `carousel` — for the case that was previously *misreported* rather
-than reported differently. TikTok, Facebook and YouTube never enter this branch
-and their responses are unchanged.
+client ignoring these keys behaves exactly as it did. `kind` only gains a new
+value — `carousel` — for the case that was previously *misreported*.
 
 `download` is a path, not an absolute URL: the server sits behind a proxy and
 does not reliably know its own public origin, and the client already has that.
-It points at the existing item endpoint, so no new download route was added.
+The route name `format=photo` is what the frontend sends and what every
+previous response advertised; it now means what it says again, and still serves
+the video items too.
 
-Types and thumbnails come from `gallery-dl --dump-json`, whose Instagram
-metadata carries `typename`, `video_url`, and `display_url` — the last being the
-still frame *even for videos*, which is how a carousel gets a thumbnail for an
-item that isn't a photo. If that call fails, `-g` is the fallback and the type
-is inferred from the URL; thumbnails are then unavailable for video items.
+#### The index has to mean the same thing twice
 
-The two lookups run concurrently, so Instagram doesn't get slower for needing
-both. A failed item lookup never fails `/api/info` — it degrades to the
-behaviour that existed before.
+`/api/download?...&i=N` resolves the item list by the **same precedence** as
+the `/api/info` call that produced the link — gallery-dl first for a `/p/` URL,
+yt-dlp's entries otherwise — and both calls normally hit the same cached list,
+so they cannot disagree. This matters because the two lists are numbered
+differently: gallery-dl counts every node in the post, yt-dlp counts only the
+video ones. On a mixed carousel, item 2 is a different file depending on who
+you ask.
 
-One related fix: the item download route derived its file extension assuming an
-image, so a carousel video would have been saved as `.jpg`. It now follows the
-CDN's content-type.
+The source then picks the route, and they are not interchangeable:
+
+- **gallery-dl** → proxy the CDN URL. The only route that can serve an image at
+  all. For a video item this is Instagram's own file: one muxed MP4 with its
+  audio already in it, which is exactly what should be handed over — remuxing
+  it would cost a round-trip through ffmpeg to produce the same thing. The
+  destination host is checked against an allowlist (`cdninstagram.com`,
+  `fbcdn.net`, HTTPS only) at the line that performs the fetch, because
+  gallery-dl's output is derived from a user-supplied URL.
+- **yt-dlp** → `--playlist-items N+1` down the ordinary merge path, arriving
+  remuxed to a seekable MP4 like every other download here.
+
+Either way the index is bounds-checked first: yt-dlp will happily accept
+`--playlist-items 9` on a three-item post and exit 0 having downloaded nothing,
+which reaches the visitor as an empty file.
 
 ### Errors
 
@@ -411,7 +600,8 @@ regexing prose: `bot_check`, `rate_limited`, `http_403`, `http_401`,
 `login_required`, `cookies`, `unsupported_url`, `geo_blocked`,
 `extractor_error`, `unavailable`, `network`, `timeout`, `tool_missing`,
 `no_output`, `no_video_stream`, `bad_json`, `unsupported_link`, `bad_format`,
-`bad_photo_index`, `blocked_media_host`, `no_temp_space`, `unknown`.
+`bad_photo_index`, `no_items`, `gallerydl_missing`, `blocked_media_host`,
+`no_formats`, `no_temp_space`, `unknown`.
 
 When the failure looks like authentication (`bot_check`, `login_required`,
 `http_401/403`, `cookies`) **and no jar is loaded**, the message says so. That

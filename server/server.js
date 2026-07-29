@@ -19,7 +19,7 @@
 const express = require("express");
 const cors = require("cors");
 const { spawn, spawnSync } = require("child_process");
-const { Readable } = require("stream");
+const { Readable } = require("stream");   // web ReadableStream -> Node stream, for the CDN proxy
 const os = require("os");
 const fs = require("fs");
 const path = require("path");
@@ -69,19 +69,41 @@ const FFPROBE = resolveTool("FFPROBE_PATH", "ffprobe");
 const GALLERYDL = resolveTool("GALLERYDL_PATH", "gallery-dl");
 
 /* --------------------------------------------------------------------------
-   Photo support is optional, and says so.
+   yt-dlp everywhere; gallery-dl for instagram.com/p/ and nothing else.
 
-   gallery-dl handles Instagram photo and carousel posts. yt-dlp cannot: it is
-   video-only, and an image post makes it exit with "There is no video in this
-   post" -- which is exactly what NO_VIDEO_RE further down is matching on. So
-   this is not a tool that can be swapped for the other.
+   yt-dlp is video-only. Its Instagram extractor skips non-video nodes, so an
+   image post exits "There is no video in this post" and images inside a mixed
+   carousel never appear at all. No format selector fixes that -- there is no
+   video track to select. Photo and carousel support therefore needs a second
+   tool, and gallery-dl is it.
 
-   It is also the only tool here without a static binary to download, so a
-   host without Python simply won't have it. Rather than let that surface as
-   "spawn gallery-dl ENOENT" on the first photo post, it is probed once at boot
-   and reported: video downloads are entirely unaffected, and the failure
-   should read as "photos unavailable" rather than as a crash.
+   The scope is the whole point, because an earlier version of this ran
+   gallery-dl on *every* Instagram URL, concurrently with yt-dlp, inside a
+   shared 25s budget. That is what produced "[instagram] --dump-json failed
+   (timeout)" and "[gallery-dl] exit null" -- the second was this server's own
+   SIGKILL. Two extractors, two logins, two sets of round-trips, on the
+   platform least tolerant of any of it.
+
+   So it is fenced in three ways:
+
+     - By URL. Only instagram.com/p/ links, which are the only ones that can
+       hold images. Reels, stories, TikTok, Facebook and YouTube never spawn
+       it, which is why those four keep working exactly as they do today.
+     - By budget. Its own timeout (GALLERYDL_TIMEOUT_MS), well inside
+       Instagram's 90s ceiling, so a slow gallery-dl can never be what makes a
+       request time out.
+     - By consequence. Its result is optional everywhere. If it is missing,
+       slow, or fails, the request falls back to what yt-dlp found and the
+       visitor still gets the videos in the post.
+
+   Failure to install is likewise not fatal: it is probed once at boot and
+   reported, and every video download on all four platforms is unaffected.
    -------------------------------------------------------------------------- */
+
+const GALLERYDL_TIMEOUT_MS = Number(process.env.GALLERYDL_TIMEOUT_MS) || 45_000;
+
+/** Instagram post URLs that can contain images. Deliberately not reels. */
+const IG_PHOTO_POST_RE = /instagram\.com\/(?:[^/]+\/)?p\//i;
 
 const GALLERYDL_STATUS = (() => {
   const probe = spawnSync(GALLERYDL, ["--version"], { encoding: "utf8", timeout: 20_000 });
@@ -97,25 +119,97 @@ const GALLERYDL_STATUS = (() => {
 })();
 
 if (GALLERYDL_STATUS.available) {
-  console.log(`[gallery-dl] ${GALLERYDL_STATUS.version} at ${GALLERYDL_STATUS.path} - photo posts supported`);
+  console.log(`[gallery-dl] ${GALLERYDL_STATUS.version} at ${GALLERYDL_STATUS.path} - instagram.com/p/ photo posts supported`);
 } else {
   console.warn(
     `[gallery-dl] NOT AVAILABLE (${GALLERYDL_STATUS.reason} for "${GALLERYDL_STATUS.path}"). ` +
-    "Instagram photo and carousel posts will fail with a clear error; " +
-    "video downloads on all platforms are unaffected. " +
+    "Instagram photo posts and the images inside carousels will be unavailable; " +
+    "videos, reels, TikTok, Facebook and YouTube are unaffected. " +
     "Fix: redeploy so postinstall installs it, or set GALLERYDL_PATH."
   );
 }
 
-/** One sentence a visitor and an operator can both act on. */
-const NO_GALLERYDL_ERROR = () => ({
-  error:
-    "Photo posts need gallery-dl, which is not installed on this server " +
-    `(${GALLERYDL_STATUS.reason} for "${GALLERYDL_STATUS.path}"). ` +
-    "Video downloads are unaffected.",
-  code: "gallerydl_missing",
-  detail: null
+/* Instagram is slower than the rest, reliably and by a lot -- its API is
+   rate-limited hard against datacenter IPs, and a carousel means walking every
+   entry. The old 25s ceiling was tuned for a single video and is where
+   "Timed out reading that post" came from. */
+const IG_TIMEOUT_MS = Number(process.env.IG_TIMEOUT_MS) || 90_000;
+const DEFAULT_TIMEOUT_MS = 25_000;
+
+/** Per-platform extraction budget. Only Instagram differs. */
+const timeoutFor = (platform) => (platform === "instagram" ? IG_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
+
+/* Socket timeout is per-connection, not per-request, so it has to rise too --
+   otherwise a slow Instagram response is killed long before the overall budget
+   is reached and the generous ceiling never applies. 15s stays everywhere
+   else: TikTok and Facebook work today, and a longer socket timeout there
+   would only make a genuinely dead host take longer to report itself. */
+const DEFAULT_SOCKET_TIMEOUT = "15";
+const IG_SOCKET_TIMEOUT = String(Number(process.env.IG_SOCKET_TIMEOUT) || 45);
+const socketTimeoutFor = (platform) =>
+  (platform === "instagram" ? IG_SOCKET_TIMEOUT : DEFAULT_SOCKET_TIMEOUT);
+
+/* Everything per-platform about an extraction, in one place, so a call site
+   cannot pick up the longer timeout and miss the retry. Instagram is the only
+   platform that differs on any of it; the object this returns for the other
+   three reproduces the previous behaviour exactly. */
+const extractOpts = (platform, playlist = false) => ({
+  label: platform,
+  platform,
+  socketTimeout: socketTimeoutFor(platform),
+  retryOnce: platform === "instagram",
+  // Only Instagram caps yt-dlp's internal retries; see the note at the flag.
+  extractorRetries: platform === "instagram" ? 1 : null,
+  playlist
 });
+
+/* --------------------------------------------------------------------------
+   The cookie-free route out of a YouTube bot check.
+
+   A YouTube session exported from a browser dies quickly when it is used from
+   a datacenter IP -- days, not weeks -- and the failure is "Sign in to confirm
+   you're not a bot" with the cookies loaded and sent. Nothing in this server
+   can stop that happening; re-exporting the jar is the only cure and it is a
+   cure with a short shelf life.
+
+   What this server can do is stop treating a dead session as the end of the
+   attempt. yt-dlp talks to YouTube as one of several "player clients", and
+   they are not equally gated. Measured against this build (2026.07.04), with
+   no cookies at all:
+
+     web, web_safari, ios     no formats at all -- these want a PO token
+     tv_simply, android, mweb  360p ceiling
+     web_embedded              2160p offered; downloaded 1080p H.264 + AAC
+
+   So web_embedded is the default here: it is the only client measured that
+   costs nothing in quality. Verified end to end -- a 1080p H.264 + AAC merge
+   with an empty cookie jar.
+
+   It is a *fallback*, not the first choice. Cookies still lead, because a
+   working session is the more capable path (age-gated and private videos
+   exist, and no player client substitutes for being logged in). This fires
+   only after YouTube has refused, and only once. Set YOUTUBE_PLAYER_CLIENT to
+   change the client, or to `off` to disable the fallback entirely.
+   -------------------------------------------------------------------------- */
+
+const YT_FALLBACK_CLIENT = process.env.YOUTUBE_PLAYER_CLIENT || "web_embedded";
+const YT_FALLBACK_ENABLED = YT_FALLBACK_CLIENT.toLowerCase() !== "off";
+
+/** The failures a different player client can plausibly get past. */
+const YT_BLOCKED_CODES = new Set([
+  "bot_check", "login_required", "http_403", "http_401", "cookies",
+  // Not an error shape, a refusal shape: YouTube strips the formats out rather
+  // than saying no. See the note in classifyError().
+  "no_formats"
+]);
+
+/** True when this failure is worth one more try as a different client. */
+const canRetryAsClient = (platform, code, alreadyTried) =>
+  YT_FALLBACK_ENABLED && platform === "youtube" && !alreadyTried && YT_BLOCKED_CODES.has(code);
+
+/* Scoped with the `youtube:` prefix, so it is inert for every other extractor
+   even if it ever leaks onto a non-YouTube command line. */
+const playerClientArgs = (client) => ["--extractor-args", `youtube:player_client=${client}`];
 
 /**
  * Codec of a file's first video stream.
@@ -360,6 +454,82 @@ const COOKIE_FILE = (() => {
   return file;
 })();
 
+/* --------------------------------------------------------------------------
+   A jar for Instagram on its own.
+
+   The shared jar above is one file for all four platforms, which is fine until
+   one of them expires. YouTube sessions die within days from a datacenter IP,
+   Instagram's last far longer, and re-exporting the shared file to fix YouTube
+   means re-exporting Instagram's working session along with it -- so a routine
+   YouTube refresh can take Instagram down with it.
+
+   So Instagram gets its own optional file. When `instagram_cookies.txt` is
+   present, Instagram requests use it and nothing else does; when it is absent,
+   Instagram falls back to the shared jar and behaves exactly as before. Both
+   yt-dlp and gallery-dl are handed the same file.
+
+   Filtered harder than the shared jar: only Meta's own domains, because that
+   is all this file is for. An accidental export of everything therefore leaks
+   nothing extra into the one process that talks to Instagram.
+   -------------------------------------------------------------------------- */
+
+const IG_COOKIE_DOMAINS = ["instagram.com", "cdninstagram.com", "facebook.com", "fbcdn.net"];
+
+const IG_COOKIE_PATHS = process.env.INSTAGRAM_COOKIES_FILE
+  ? [process.env.INSTAGRAM_COOKIES_FILE]
+  : [`${SECRETS_DIR}/instagram_cookies.txt`, path.join(__dirname, "instagram_cookies.txt")];
+
+const IG_COOKIE_STATUS = { checked: [], source: null, entries: 0, loaded: false };
+
+const IG_COOKIE_FILE = (() => {
+  for (const p of IG_COOKIE_PATHS) {
+    const record = { path: p, exists: false, readable: false, size: 0, error: null };
+    let text;
+    try {
+      const st = fs.statSync(p);
+      record.exists = true;
+      record.size = st.size;
+      fs.accessSync(p, fs.constants.R_OK);
+      record.readable = true;
+      text = fs.readFileSync(p, "utf8");
+    } catch (e) {
+      record.error = e.code || e.message;
+      IG_COOKIE_STATUS.checked.push(record);
+      continue;
+    }
+    IG_COOKIE_STATUS.checked.push(record);
+    if (!text.trim()) { record.error = "file is empty"; continue; }
+
+    const lines = [];
+    for (const raw of text.split("\n")) {
+      const line = raw.trimEnd();
+      if (!line || COOKIE_HEADER_RE.test(line)) continue;
+      // #HttpOnly_ is an entry wearing a comment's clothes; strip before the
+      // domain is read, or every httpOnly cookie fails the allowlist.
+      const entry = line.replace(/^#HttpOnly_/i, "");
+      if (entry.startsWith("#")) continue;
+      const domain = String(cookieFields(entry)[0] || "").replace(/^\./, "").toLowerCase();
+      if (!domain) continue;
+      if (!IG_COOKIE_DOMAINS.some((d) => domain === d || domain.endsWith("." + d))) continue;
+      lines.push(line);
+    }
+
+    if (!lines.length) { record.error = "no instagram.com entries"; continue; }
+
+    try {
+      const file = path.join(os.tmpdir(), "vv-ig-cookies.txt");
+      fs.writeFileSync(file, `${COOKIE_HEADER}\n${lines.join("\n")}\n`, { mode: 0o600 });
+      IG_COOKIE_STATUS.source = p;
+      IG_COOKIE_STATUS.entries = lines.length;
+      IG_COOKIE_STATUS.loaded = true;
+      return file;
+    } catch (e) {
+      record.error = `could not stage: ${e.code || e.message}`;
+    }
+  }
+  return null;
+})();
+
 /** The platforms a session actually matters for, and whether one is present. */
 const COOKIE_PLATFORM_DOMAINS = ["youtube.com", "tiktok.com", "instagram.com", "facebook.com"];
 
@@ -387,6 +557,18 @@ function cookieSummary() {
     perPlatform: Object.fromEntries(
       COOKIE_PLATFORM_DOMAINS.map((d) => [d, cookiesForDomain(d)])
     ),
+    /* The dedicated Instagram jar, reported separately because it answers a
+       different question: not "is there a session" but "which file is
+       Instagram actually using". Absent is normal -- it means the shared jar. */
+    instagram: {
+      dedicatedFile: IG_COOKIE_STATUS.loaded,
+      source: IG_COOKIE_STATUS.source,
+      entries: IG_COOKIE_STATUS.entries,
+      usingSharedJar: !IG_COOKIE_STATUS.loaded,
+      pathsChecked: IG_COOKIE_STATUS.checked.map((c) => ({
+        path: c.path, exists: c.exists, readable: c.readable, size: c.size, error: c.error
+      }))
+    },
     pathsChecked: COOKIE_STATUS.checked.map((c) => ({
       path: c.path,
       exists: c.exists,
@@ -457,7 +639,6 @@ function cookieSummary() {
    yt-dlp does not just read the file it's handed -- it writes the whole jar
    back when it finishes, merging in whatever the site set during the fetch. A
    single request against YouTube turns an 89-byte file into a 972-byte one.
-   gallery-dl does the same by default.
 
    Sharing one file across concurrent downloads therefore means two processes
    rewriting it at once, and the loser's write can leave a truncated jar --
@@ -469,14 +650,18 @@ function cookieSummary() {
 
 const NO_COOKIES = { args: [], done: () => {} };
 
-function cookieSession() {
-  if (!COOKIE_FILE) return NO_COOKIES;
+function cookieSession(platform) {
+  /* Instagram gets its own file when one was configured; everything else, and
+     Instagram without one, gets the shared jar. Chosen here rather than at the
+     call sites so no path can be given the wrong session by omission. */
+  const master = (platform === "instagram" && IG_COOKIE_FILE) ? IG_COOKIE_FILE : COOKIE_FILE;
+  if (!master) return NO_COOKIES;
 
   let dir;
   try {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "vv-ck-"));
     const copy = path.join(dir, "cookies.txt");
-    fs.copyFileSync(COOKIE_FILE, copy);
+    fs.copyFileSync(master, copy);
     fs.chmodSync(copy, 0o600);
 
     /* Size at hand-over, so the copy can be checked afterwards -- see the note
@@ -652,6 +837,13 @@ function spawnYtdlp(args, label) {
      invocation gets it -- metadata, merge, stream and mp3 alike -- and none of
      the format or routing code has to know it exists. */
   const final = [...(YTDLP_VERBOSE ? ["--verbose"] : []), ...JS_RUNTIME_ARGS, ...args];
+
+  /* The exact command, on every run, not only under YTDLP_VERBOSE. "Which
+     flags actually went out" is the first question asked of every failure here
+     and it was previously answerable only by redeploying with a debug switch
+     on. One line, and it carries no secret -- the jar is a path to a temp copy,
+     never its contents. */
+  console.log(`[ytdlp:${label}] ${YTDLP} ${final.join(" ")}`);
 
   if (YTDLP_VERBOSE) {
     const i = final.indexOf("--cookies");
@@ -907,7 +1099,7 @@ const FORMATS = {
 const PLAN_TTL_MS = 5 * 60_000;
 const plans = new Map();
 
-const planKey = (url, selector) => `${selector || ""} ${url}`;
+const planKey = (url, selector) => `${selector || ""}\\u0000${url}`;
 
 function cachedPlan(url, selector) {
   const rec = plans.get(planKey(url, selector));
@@ -967,24 +1159,78 @@ function downloadPlan(info) {
  * it just loses the plan and falls back to the merge route, which can satisfy
  * anything.
  */
-function ytdlpJson(url, timeoutMs = 25_000, selector = null) {
-  return ytdlpJsonOnce(url, timeoutMs, selector).catch((err) => {
-    if (!selector || err.code !== "format_unavailable") throw err;
-    console.warn(
-      `[ytdlp] selector "${selector}" is not satisfiable for this video; ` +
-      "re-reading metadata without it (download will take the merge route)"
-    );
-    return ytdlpJsonOnce(url, timeoutMs, null);
-  });
+function ytdlpJson(url, timeoutMs = DEFAULT_TIMEOUT_MS, selector = null, opts = {}) {
+  const label = opts.label || "ytdlp";
+
+  return ytdlpJsonOnce(url, timeoutMs, selector, { ...opts, attempt: 1 })
+    .catch((err) => {
+      if (!selector || err.code !== "format_unavailable") throw err;
+      console.warn(
+        `[${label}] selector "${selector}" is not satisfiable for this video; ` +
+        "re-reading metadata without it (download will take the merge route)"
+      );
+      return ytdlpJsonOnce(url, timeoutMs, null, { ...opts, attempt: 1 });
+    })
+    .catch((err) => {
+      /* One retry, for transient failures only, and only where it was asked
+         for. Instagram is the platform that needs it: it rate-limits by
+         dropping the connection rather than answering, so an extraction that
+         times out or dies mid-socket is very often fine seconds later. A
+         second attempt is cheap next to returning an error for something that
+         would have worked.
+
+         Deliberately not retried: auth, format and "no video" failures. Those
+         are answers, not accidents, and repeating them only doubles the wait
+         before the visitor sees the same message. */
+      /* YouTube refused the session. Try once more as a player client that
+         does not need one -- see the note at YT_FALLBACK_CLIENT. Checked
+         before the transient retry because the two are mutually exclusive:
+         this is a refusal, not a stall. */
+      if (canRetryAsClient(opts.platform, err.code, opts.playerClient)) {
+        console.warn(
+          `[${label}] refused (${err.code}); retrying once as player_client=${YT_FALLBACK_CLIENT}`
+        );
+        return ytdlpJsonOnce(url, timeoutMs, selector, {
+          ...opts, playerClient: YT_FALLBACK_CLIENT, attempt: 2
+        }).then((info) => {
+          /* Tag the dump with the client that produced it. The formats in it
+             are that client's formats, so the download has to be made as the
+             same client or it is shopping from the wrong catalogue -- and this
+             survives into the plan cache, which is where the download route
+             reads it back. */
+          if (info && typeof info === "object") info.__playerClient = YT_FALLBACK_CLIENT;
+          return info;
+        });
+      }
+
+      if (!opts.retryOnce || !RETRYABLE_CODES.has(err.code)) throw err;
+      console.warn(`[${label}] attempt 1 failed (${err.code}: ${err.message}); retrying once`);
+      return ytdlpJsonOnce(url, timeoutMs, selector, { ...opts, retryOnce: false, attempt: 2 })
+        .catch((again) => {
+          /* Report the second failure -- it is the current state of the world,
+             and if the two differ the later one is the more useful. The flag
+             is what lets the route say "twice", so a one-off is not mistaken
+             for a dead platform. */
+          again.retried = true;
+          console.error(`[${label}] both attempts failed; final reason ${again.code}: ${again.message}`);
+          throw again;
+        });
+    });
 }
 
+/* Failures worth a second attempt: the network, not the post. Deliberately
+   short. "unknown" is not on it -- it is the bucket every unrecognised message
+   lands in, so retrying it would double the wait on real errors far more often
+   than it would rescue a transient one. */
+const RETRYABLE_CODES = new Set(["timeout", "network", "rate_limited"]);
+
 /** One attempt. Buffers stdout; used for metadata only, never for the video. */
-function ytdlpJsonOnce(url, timeoutMs = 25_000, selector = null) {
+function ytdlpJsonOnce(url, timeoutMs = DEFAULT_TIMEOUT_MS, selector = null, opts = {}) {
   return new Promise((resolve, reject) => {
     // Metadata is login-walled on exactly the same posts the media is, so this
     // needs the session as much as the download does -- without it /api/info
     // fails first and the download is never even attempted.
-    const jar = cookieSession();
+    const jar = cookieSession(opts.platform);
 
     /* Passing the selector costs nothing and buys the download plan: with -f
        and -S applied, the dump carries a `requested_downloads` entry naming
@@ -996,81 +1242,147 @@ function ytdlpJsonOnce(url, timeoutMs = 25_000, selector = null) {
        is disabled" as a warning, not an error, and suppressing those while
        asking why a download failed is self-defeating. They land on stderr,
        which is only ever read on failure, so stdout stays clean JSON. */
-    const args = ["-J", "--no-playlist", "--socket-timeout", "15"];
+    /* Playlist mode is opt-in and used by exactly one caller: an Instagram
+       post URL, where the "playlist" is the carousel and its entries are the
+       items. Every other caller keeps --no-playlist, so a TikTok, Facebook or
+       YouTube link that happens to sit in a playlist still resolves to the one
+       video that was asked for. --playlist-end caps a pathological post rather
+       than trusting it; Instagram allows 20.
+
+       The socket timeout is per-caller for the same reason: 15s is right for
+       hosts that answer, and wrong for Instagram, which under rate-limiting
+       stalls a connection it fully intends to serve. */
+    const args = ["-J"];
+    args.push(...(opts.playlist ? ["--playlist-end", String(opts.playlistEnd || 20)] : ["--no-playlist"]));
+    args.push("--socket-timeout", String(opts.socketTimeout || DEFAULT_SOCKET_TIMEOUT));
+
+    /* Fewer internal retries, not more. yt-dlp's default is 3 extractor
+       attempts with a growing sleep between them, which is how a 25s budget
+       was being spent entirely inside one yt-dlp process that then got killed
+       with nothing to show. Capping it means a failing attempt reports back
+       while there is still budget left, and the retry above -- a fresh
+       process, fresh connections -- is the one that gets the second go. */
+    if (opts.extractorRetries != null) {
+      args.push("--extractor-retries", String(opts.extractorRetries));
+    }
+    if (opts.playerClient) args.push(...playerClientArgs(opts.playerClient));
+
     if (selector) {
       args.push("-f", selector);
       if (FORMAT_SORT) args.push("-S", FORMAT_SORT);
     }
     args.push(...jar.args, url);
 
+    const attempt = opts.attempt || 1;
+    const label = opts.label || "ytdlp";
+    const started = Date.now();
+
     // Args as an array + no shell: the URL can never be interpreted as a command.
-    const child = spawnYtdlp(args, "metadata");
+    const child = spawnYtdlp(args, `${label}:metadata`);
+
+    console.log(
+      `[${label}] extract attempt ${attempt}: timeout ${timeoutMs}ms, ` +
+      `socket ${opts.socketTimeout || DEFAULT_SOCKET_TIMEOUT}s, ` +
+      `${opts.playlist ? "playlist" : "single"}, cookies=${COOKIE_FILE ? "yes" : "no"}`
+    );
+
+    /* Every exit from this promise goes through here, so the duration line is
+       printed exactly once per attempt whatever happened -- and the child is
+       killed exactly once. An abandoned yt-dlp holds a socket and a cookie
+       copy open for as long as it likes, which on a 512MB box is how a service
+       ends up wedged after a handful of slow posts. */
+    let settled = false;
+    let timer = null;   // declared before finish() so an early spawn error is safe
+    const finish = (outcome, fn) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      console.log(`[${label}] extract attempt ${attempt} ${outcome} in ${Date.now() - started}ms`);
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      jar.done();
+      fn();
+    };
 
     let out = "";
     let err = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      jar.done();
-      reject(Object.assign(new Error(`Timed out after ${timeoutMs}ms reading that link.`), {
-        code: "timeout",
-        stderr: err,
-        detail: redact(err.trim()) || null
-      }));
+    timer = setTimeout(() => {
+      finish("timed out", () => {
+        reject(Object.assign(new Error(
+          `Timed out after ${timeoutMs}ms reading that link` +
+          (attempt > 1 ? " (second attempt)" : "") + "."
+        ), {
+          code: "timeout",
+          stderr: err,
+          detail: redact(err.trim()) || null
+        }));
+      });
     }, timeoutMs);
 
     child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { err += d; });
     child.on("error", (e) => {
-      clearTimeout(timer);
-      jar.done();
-      reject(Object.assign(new Error(redact(`Could not run yt-dlp (${YTDLP}): ${e.message}`)), {
-        code: "tool_missing",
-        stderr: "",
-        detail: null
-      }));
+      finish("could not start", () => {
+        reject(Object.assign(new Error(redact(`Could not run yt-dlp (${YTDLP}): ${e.message}`)), {
+          code: "tool_missing",
+          stderr: "",
+          detail: null
+        }));
+      });
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
-      jar.done();
       if (code !== 0) {
         const info = toolError(err, "yt-dlp");
         const e = new Error(info.error);
         e.code = info.code;
         e.detail = info.detail;
         e.exitCode = code;
-        // Keep the raw text too: /api/info reads it to tell "this is a photo
-        // post" apart from a genuine failure, and that match needs the
+        // Keep the raw text too: the routes read it to tell "this post holds
+        // only images" apart from a genuine failure, and that match needs the
         // original string rather than the redacted one.
         e.stderr = err;
-        return reject(e);
+        return finish(`failed (exit ${code}, ${e.code})`, () => reject(e));
       }
       try {
-        resolve(JSON.parse(out));
+        const parsed = JSON.parse(out);
+        finish("ok", () => resolve(parsed));
       } catch (e) {
-        reject(Object.assign(new Error(`yt-dlp returned unparseable JSON: ${e.message}`), {
-          code: "bad_json",
-          stderr: err,
-          detail: redact(out.slice(0, 500)) || null
-        }));
+        finish("returned unparseable JSON", () => {
+          reject(Object.assign(new Error(`yt-dlp returned unparseable JSON: ${e.message}`), {
+            code: "bad_json",
+            stderr: err,
+            detail: redact(out.slice(0, 500)) || null
+          }));
+        });
       }
     });
   });
 }
 
 /* --------------------------------------------------------------------------
-   Photo posts (gallery-dl)
+   Image-only posts
+
+   yt-dlp raises this rather than returning an empty result, and it is the one
+   Instagram failure that is not a failure of ours: the post parsed, the
+   session worked, there is simply no video in it. It gets its own message so
+   nobody goes looking for a cookie problem that isn't there.
+
+   For an instagram.com/p/ URL this is the hand-off point to gallery-dl, which
+   can see the images yt-dlp cannot. For anything else -- a reel, a story, a
+   different platform -- it is the end of the line and returns a clear error.
    -------------------------------------------------------------------------- */
 
 /** yt-dlp's exact words when a post parsed fine but holds only images. */
 const NO_VIDEO_RE = /there is no video in this post/i;
 
-/**
- * Instagram serves photo media from these CDNs. gallery-dl's output is not
- * user input, but it is derived from a user-supplied URL, and this process
- * will fetch whatever comes back -- so pin the destination the same way
- * classify() pins the source. Without this, a hostile extractor result turns
- * the photo route into the SSRF hole the host allowlist exists to prevent.
- */
+/* --------------------------------------------------------------------------
+   Where photo media is allowed to come from.
+
+   gallery-dl's output is not user input, but it is derived from a user-supplied
+   URL, and this process will fetch whatever comes back -- so pin the
+   destination the same way classify() pins the source. Without this, the photo
+   route is the SSRF hole the host allowlist exists to prevent.
+   -------------------------------------------------------------------------- */
+
 const MEDIA_HOSTS = ["cdninstagram.com", "fbcdn.net"];
 
 function isAllowedMedia(raw) {
@@ -1088,19 +1400,20 @@ function isAllowedMedia(raw) {
 /* --------------------------------------------------------------------------
    Instagram post shape
 
-   A /p/ link can be one photo, one video, or a carousel mixing both, and this
-   server could only ever see the first of those properly: yt-dlp with
-   --no-playlist returns one video and says nothing about its siblings, and the
-   gallery-dl fallback treated every URL it got back as a photo.
+   A /p/ link can be one video or a carousel of several, and --no-playlist made
+   the server blind to the difference: it returns whichever item yt-dlp picked
+   and says nothing about its siblings.
 
-   `gallery-dl --dump-json` carries the metadata that settles it -- `typename`
-   (GraphImage / GraphVideo / GraphSidecar), `video_url` when an item is a
-   video, and `display_url`, which is the still frame *even for videos*, so a
-   carousel can show a thumbnail for an item that is not a photo.
+   Dropping --no-playlist for post URLs settles it without a second tool. A
+   carousel comes back as `_type: "playlist"` with one `entries` element per
+   item, each carrying its own `vcodec`, `ext` and `thumbnail`; a single post
+   has no entries and describes itself. Both shapes go through the same
+   reader below, so the post structure is a free by-product of the extraction
+   /api/info already performs.
 
-   `-g` stays as the fallback. It has been in use here for a while, and
-   inferring type from the file extension is worse than reading metadata but a
-   great deal better than calling everything a photo.
+   Known limit, stated plainly: yt-dlp's Instagram extractor skips non-video
+   nodes, so images in a mixed carousel do not appear in `entries` and an
+   image-only post raises NO_VIDEO_RE. Item indices therefore count videos.
    -------------------------------------------------------------------------- */
 
 /** The Instagram URL shapes that address a post rather than a profile. */
@@ -1122,16 +1435,71 @@ function itemTypeFrom(mediaUrl, meta = {}) {
 }
 
 /**
- * Parse `gallery-dl --dump-json` into media items.
+ * Media items for an Instagram post, read out of yt-dlp's own dump.
  *
- * The output is an array of message tuples, and the ones that matter look like
- * [3, "<url>", { ...metadata }]. Anything shaped differently is skipped rather
- * than guessed at, so a change to gallery-dl's other message types cannot turn
- * into a malformed item here.
+ * A carousel comes back as a playlist: `_type: "playlist"` with an
+ * `entries` array, one per item. A single post has no entries and describes
+ * itself. Both shapes are handled here, so the post structure of a reel or a
+ * video post comes free with the extraction /api/info already performs -- no
+ * second process, which is what keeps reels off the gallery-dl path entirely.
  *
- * Pure, and exported, because this is the one part of the feature that can be
- * tested without an Instagram session.
+ * Videos only, necessarily: yt-dlp skips non-video nodes. Images come from
+ * galleryItems() below, and only for instagram.com/p/ URLs.
+ *
+ * Pure, and exported, because it is the part of this that can be tested
+ * without an Instagram session.
  */
+function instagramItems(info) {
+  if (!info || typeof info !== "object") return [];
+
+  const entries = Array.isArray(info.entries) ? info.entries.filter(Boolean) : null;
+  const list = entries && entries.length ? entries : [info];
+
+  return list.map((entry) => {
+    /* vcodec is the reliable signal: yt-dlp sets it to the literal string
+       "none" for a stream with no video track. Extension is the fallback for
+       entries that never got that far. */
+    const vcodec = entry.vcodec || null;
+    const type =
+      vcodec && vcodec !== "none" ? "video"
+      : vcodec === "none" ? "photo"
+      : entry.ext && VIDEO_EXT_RE.test(`.${entry.ext}`) ? "video"
+      : entry.ext && PHOTO_EXT_RE.test(`.${entry.ext}`) ? "photo"
+      : itemTypeFrom(entry.url || "");
+
+    return {
+      type,
+      url: typeof entry.url === "string" ? entry.url : null,
+      thumbnail: typeof entry.thumbnail === "string" ? entry.thumbnail : null,
+      title: entry.title || null
+    };
+  });
+}
+
+/* --------------------------------------------------------------------------
+   gallery-dl: the images yt-dlp cannot see
+
+   `gallery-dl --dump-json` carries the metadata that settles an item's type --
+   `typename` (GraphImage / GraphVideo / GraphSidecar), `video_url` when an
+   item is a video, and `display_url`, which is the still frame *even for
+   videos*, so a carousel gets a thumbnail for an item that is not a photo.
+
+   `-g` is the fallback: it prints URLs and nothing else, so the type has to be
+   inferred from the extension. Worse than reading metadata, much better than
+   calling everything a photo.
+
+   Everything here is best-effort by construction. Every entry point resolves
+   to an empty list rather than rejecting, because a failure to enumerate
+   images must never be able to fail a request whose videos yt-dlp already
+   found.
+   -------------------------------------------------------------------------- */
+
+/* Item lists share the plan cache rather than getting a Map of their own: same
+   URL key, same TTL, same eviction. Not a real selector, so it cannot collide
+   with one. */
+const GALLERY_CACHE_KEY = "\\u0000gallery-items";
+
+/** Parse `gallery-dl --dump-json` into media items. */
 function parseGalleryItems(jsonText) {
   let parsed;
   try {
@@ -1143,6 +1511,8 @@ function parseGalleryItems(jsonText) {
 
   const items = [];
   for (const msg of parsed) {
+    // Messages are [type, url, metadata] tuples; anything else is progress
+    // chatter and is skipped rather than guessed at.
     if (!Array.isArray(msg) || msg.length < 2) continue;
     const mediaUrl = typeof msg[1] === "string" ? msg[1] : null;
     if (!mediaUrl) continue;
@@ -1150,8 +1520,8 @@ function parseGalleryItems(jsonText) {
     const meta = msg.length > 2 && msg[2] && typeof msg[2] === "object" ? msg[2] : {};
     const type = itemTypeFrom(mediaUrl, meta);
 
-    /* display_url is the still frame and exists for videos too, which is the
-       entire reason for preferring --dump-json. A photo is its own thumbnail. */
+    /* display_url is the still frame even for videos, which is the entire
+       reason for preferring --dump-json. A photo is its own thumbnail. */
     const thumbnail = typeof meta.display_url === "string" ? meta.display_url
       : type === "photo" ? mediaUrl
       : null;
@@ -1159,6 +1529,152 @@ function parseGalleryItems(jsonText) {
     items.push({ type, url: mediaUrl, thumbnail });
   }
   return items;
+}
+
+/**
+ * Cancellation for a gallery-dl run that nobody is waiting for any more.
+ *
+ * The images are fetched concurrently with the yt-dlp extraction, so when that
+ * extraction fails the request answers immediately -- and would leave
+ * gallery-dl running against Instagram for the rest of its budget, holding a
+ * connection to the platform that is already rate-limiting us. Its own timeout
+ * would eventually reap it, but "eventually" is the wrong answer for a process
+ * whose result is already known to be unwanted.
+ */
+function abortGallery(ctl) {
+  if (!ctl || ctl.cancelled) return;
+  ctl.cancelled = true;
+  const child = ctl.child;
+  if (child && child.exitCode === null && child.signalCode === null) {
+    console.log("[gallery-dl] cancelled: the request it belonged to has already failed");
+    child.kill("SIGKILL");
+  }
+}
+
+/** Run gallery-dl, buffer stdout, kill it if it outstays its budget. */
+function spawnGallery(url, args, timeoutMs, label, ctl = {}) {
+  return new Promise((resolve, reject) => {
+    if (ctl.cancelled) return reject(Object.assign(new Error("cancelled"), { code: "cancelled" }));
+
+    const jar = cookieSession("instagram");
+    const final = [...args, ...jar.args, url]; // array + no shell: never a command
+    const started = Date.now();
+
+    console.log(`[gallery-dl:${label}] ${GALLERYDL} ${final.join(" ")}`);
+
+    const child = spawn(GALLERYDL, final);
+    ctl.child = child;   // so abortGallery() can reach it
+
+    let out = "";
+    let err = "";
+    let settled = false;
+    let timer = null;
+
+    // One exit path, so the duration is logged once and the child is never
+    // left running -- the failure that produced "[gallery-dl] exit null".
+    const finish = (outcome, fn) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      console.log(`[gallery-dl:${label}] ${outcome} in ${Date.now() - started}ms`);
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      jar.done();
+      fn();
+    };
+
+    timer = setTimeout(() => {
+      finish(`timed out after ${timeoutMs}ms`, () => {
+        reject(Object.assign(new Error(`gallery-dl timed out after ${timeoutMs}ms`), {
+          code: "timeout", stderr: err
+        }));
+      });
+    }, timeoutMs);
+
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { err += d; });
+
+    child.on("error", (e) => {
+      finish(`could not start (${e.code || e.message})`, () => {
+        reject(Object.assign(new Error(redact(`Could not run gallery-dl (${GALLERYDL}): ${e.message}`)), {
+          code: "tool_missing", stderr: ""
+        }));
+      });
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        return finish(`exit ${code}`, () => {
+          reject(Object.assign(new Error(meaningfulLines(err).join(" ") || `gallery-dl exited ${code}`), {
+            code: classifyError(err), stderr: err, exitCode: code
+          }));
+        });
+      }
+      finish("ok", () => resolve(out));
+    });
+  });
+}
+
+/**
+ * Every media item in an instagram.com/p/ post, images included.
+ *
+ * Never rejects. gallery-dl is an enhancement to what yt-dlp found, so a
+ * failure here costs images and nothing else -- the caller keeps whatever
+ * yt-dlp gave it. Every reason for returning nothing is logged, because
+ * "the carousel only shows videos" is otherwise indistinguishable from
+ * "the carousel only has videos".
+ */
+async function galleryItems(url, timeoutMs = GALLERYDL_TIMEOUT_MS, ctl = {}) {
+  if (!IG_PHOTO_POST_RE.test(String(url))) return [];   // reels never come here
+  if (!GALLERYDL_STATUS.available) {
+    console.warn(`[gallery-dl] not installed (${GALLERYDL_STATUS.reason}); images unavailable for ${url}`);
+    return [];
+  }
+
+  /* /api/info enumerated this post seconds ago and the visitor has just
+     clicked one of the items it advertised. Reusing that list is not only
+     faster, it is the thing that makes index N mean the same on both calls --
+     a second gallery-dl run could in principle return a different order. */
+  const cached = cachedPlan(url, GALLERY_CACHE_KEY);
+  if (cached) {
+    console.log(`[gallery-dl] ${cached.length} item(s) for ${url} (cached)`);
+    return cached;
+  }
+
+  try {
+    const raw = await spawnGallery(url, ["--dump-json", "--quiet"], timeoutMs, "dump-json", ctl);
+    const items = parseGalleryItems(raw).filter((it) => isAllowedMedia(it.url));
+    if (items.length) {
+      console.log(`[gallery-dl] ${items.length} item(s) for ${url}: ${items.map((i) => i.type).join(", ")}`);
+      rememberPlan(url, GALLERY_CACHE_KEY, items);
+      return items;
+    }
+    console.warn("[gallery-dl] --dump-json returned no usable items; falling back to -g");
+  } catch (e) {
+    console.warn(`[gallery-dl] --dump-json failed (${e.code || e.message}); falling back to -g`);
+  }
+
+  /* -g is a second process, and it is worth it only because it is the
+     difference between a photo post working and not. It gets what is left of
+     the budget, halved, so the fallback cannot double the wait. */
+  try {
+    const raw = await spawnGallery(url, ["-g", "--quiet"], Math.max(10_000, Math.floor(timeoutMs / 2)), "urls", ctl);
+    const urls = raw.split("\n").map((s) => s.trim()).filter(Boolean).filter(isAllowedMedia);
+    if (!urls.length) {
+      console.warn(`[gallery-dl] -g returned nothing usable for ${url}`);
+      return [];
+    }
+    console.log(`[gallery-dl] ${urls.length} url(s) for ${url} via -g (types inferred from extension)`);
+    const items = urls.map((u) => ({
+      type: itemTypeFrom(u),
+      url: u,
+      thumbnail: itemTypeFrom(u) === "photo" ? u : null
+    }));
+    rememberPlan(url, GALLERY_CACHE_KEY, items);
+    return items;
+  } catch (e) {
+    console.error(`[gallery-dl] item lookup failed entirely for ${url}: ${e.code || e.message}`);
+    return [];
+  }
 }
 
 /** single_photo | single_video | carousel. Null when there is nothing to say. */
@@ -1169,45 +1685,10 @@ function classifyPostType(items) {
 }
 
 /**
- * Media items for a post, richest source first.
- *
- * Never rejects: a post-shape lookup is an enhancement, and failing it must not
- * fail /api/info. Callers get [] and fall back to the behaviour that existed
- * before this could be asked.
- */
-async function galleryItems(url, timeoutMs = 25_000) {
-  // Don't spawn a binary that was already established to be absent -- that is
-  // where the raw ENOENT came from, once per attempt, saying nothing useful.
-  if (!GALLERYDL_STATUS.available) return [];
-
-  try {
-    const raw = await galleryDump(url, timeoutMs);
-    const items = parseGalleryItems(raw).filter((it) => isAllowedMedia(it.url));
-    if (items.length) return items;
-  } catch (e) {
-    console.warn(`[instagram] --dump-json failed (${e.code || e.message}); falling back to -g`);
-  }
-
-  try {
-    const urls = await galleryUrls(url, timeoutMs);
-    return urls.map((u) => ({
-      type: itemTypeFrom(u),
-      url: u,
-      thumbnail: itemTypeFrom(u) === "photo" ? u : null
-    }));
-  } catch (e) {
-    console.warn(`[instagram] item lookup failed entirely (${e.code || e.message})`);
-    return [];
-  }
-}
-
-/**
  * The `postType` / `items` block added to an Instagram /api/info response.
  *
  * Additive on purpose. Every field that existed before still means what it
- * meant, so a client that ignores these two keys behaves exactly as it did;
- * `kind` only gains a new value ("carousel") for the case that was previously
- * misreported rather than reported differently.
+ * meant, so a client that ignores these two keys behaves exactly as it did.
  *
  * `download` is a path rather than an absolute URL because the server sits
  * behind a proxy and does not reliably know its own public origin -- the
@@ -1217,130 +1698,25 @@ async function galleryItems(url, timeoutMs = 25_000) {
  * Returns {} when there is nothing to add, which keeps the spread at the call
  * sites harmless for every other platform.
  */
-function describePost(items, fallbackUrls, url, platform) {
+function describePost(items, url, platform) {
   if (platform !== "instagram") return {};
 
-  const list = items && items.length
-    ? items
-    : (fallbackUrls || []).map((u) => ({ type: itemTypeFrom(u), url: u, thumbnail: null }));
-
-  const postType = classifyPostType(list);
+  const postType = classifyPostType(items);
   if (!postType) return {};
 
   const q = encodeURIComponent(url);
   return {
     postType,
-    itemCount: list.length,
-    items: list.map((it, i) => ({
+    itemCount: items.length,
+    items: items.map((it, i) => ({
       index: i,
       type: it.type,
-      // The proxied endpoint, not the CDN URL: those are header-locked and
+      // The proxied endpoint, not a CDN URL: those are header-locked and
       // expire, which is the reason this server exists at all.
       download: `/api/download?url=${q}&format=photo&i=${i}`,
-      thumbnail: it.thumbnail || (it.type === "photo" ? it.url : null)
+      thumbnail: it.thumbnail
     }))
   };
-}
-
-/** Raw stdout of `gallery-dl --dump-json`. */
-function galleryDump(url, timeoutMs = 25_000) {
-  return new Promise((resolve, reject) => {
-    const jar = cookieSession();
-    const args = ["--dump-json", "--quiet", ...jar.args, url];
-    const child = spawn(GALLERYDL, args);
-
-    let out = "";
-    let err = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      jar.done();
-      reject(Object.assign(new Error("gallery-dl --dump-json timed out"), { code: "timeout" }));
-    }, timeoutMs);
-
-    child.stdout.on("data", (d) => { out += d; });
-    child.stderr.on("data", (d) => { err += d; });
-    child.on("error", (e) => {
-      clearTimeout(timer);
-      jar.done();
-      reject(Object.assign(new Error(e.message), { code: "tool_missing" }));
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      jar.done();
-      if (code !== 0) {
-        return reject(Object.assign(new Error(meaningfulLines(err).join(" ") || `exit ${code}`), {
-          code: classifyError(err)
-        }));
-      }
-      resolve(out);
-    });
-  });
-}
-
-/**
- * Direct media URLs for a post, in order.
- *
- * Uses `-g` (one URL per line): a line-per-URL contract is hard to misread, and
- * the URL is all the download route needs. galleryItems() prefers --dump-json
- * when it wants types and thumbnails, and falls back to this.
- */
-function galleryUrls(url, timeoutMs = 25_000) {
-  if (!GALLERYDL_STATUS.available) {
-    const e = new Error(NO_GALLERYDL_ERROR().error);
-    e.code = "gallerydl_missing";
-    e.detail = null;
-    return Promise.reject(e);
-  }
-  return new Promise((resolve, reject) => {
-    // Same disposable copy the yt-dlp paths get: gallery-dl updates the jar it
-    // is handed by default, so pointing it at the master has the same race.
-    const jar = cookieSession();
-
-    const args = ["-g", "--quiet", ...jar.args];
-    args.push(url); // array + no shell: never interpreted as a command
-
-    const child = spawn(GALLERYDL, args);
-
-    let out = "";
-    let err = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      jar.done();
-      reject(new Error("Timed out reading that post."));
-    }, timeoutMs);
-
-    child.stdout.on("data", (d) => { out += d; });
-    child.stderr.on("data", (d) => { err += d; });
-    child.on("error", (e) => {
-      clearTimeout(timer);
-      jar.done();
-      reject(Object.assign(new Error(redact(`Could not run gallery-dl (${GALLERYDL}): ${e.message}`)), {
-        code: "tool_missing", detail: null
-      }));
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      jar.done();
-      const urls = out.split("\n").map((s) => s.trim()).filter(Boolean);
-
-      if (code !== 0 || !urls.length) {
-        console.error(`[gallery-dl] exit ${code}: ${err.trim()}`);
-        const info = toolError(err, "gallery-dl");
-        return reject(Object.assign(new Error(info.error), {
-          code: info.code, detail: info.detail, exitCode: code
-        }));
-      }
-
-      const safe = urls.filter(isAllowedMedia);
-      if (!safe.length) {
-        return reject(Object.assign(
-          new Error(`gallery-dl returned ${urls.length} URL(s), none on an allowed media host.`),
-          { code: "blocked_media_host", detail: redact(urls.slice(0, 3).join("\n")) }
-        ));
-      }
-      resolve(safe);
-    });
-  });
 }
 
 /* --------------------------------------------------------------------------
@@ -1410,6 +1786,14 @@ function classifyError(stderr) {
   if (/requested format is not available|requested format was not available/.test(s)) {
     return "format_unavailable";
   }
+  /* YouTube's other refusal, and it does not look like one. When a client
+     needs a PO token and hasn't got one, YouTube returns a player response
+     with the formats stripped out rather than an error -- measured on this
+     build against `web`, `web_safari` and `ios` with no cookies. It reads like
+     a broken video and is really "this client is not allowed to have this",
+     which is why it gets its own code: it is the second thing the player-client
+     fallback exists to get past. */
+  if (/no video formats found|requested format is not available.*only images/.test(s)) return "no_formats";
   if (/unable to extract|extractorerror|failed to parse/.test(s)) return "extractor_error";
   if (/http error 404|not found|does not exist|video unavailable|has been removed|been terminated/.test(s)) {
     return "unavailable";
@@ -1421,7 +1805,7 @@ function classifyError(stderr) {
 }
 
 /**
- * Build the error payload for a failed yt-dlp / gallery-dl run.
+ * Build the error payload for a failed yt-dlp run.
  *
  * `tool` only shapes the fallback sentence for the case where the process died
  * without saying anything -- a SIGKILL from the timeout, typically.
@@ -1478,6 +1862,43 @@ function toolError(stderr, tool = "yt-dlp") {
   };
 }
 
+/**
+ * The response body for a failed extraction, with Instagram's own footnote.
+ *
+ * yt-dlp's message survives verbatim -- that rule does not change here. What
+ * gets added is the one thing yt-dlp cannot know: whether a session was sent.
+ *
+ * It matters because Instagram's two failure modes look identical from the
+ * outside. An anonymous request from a datacenter IP is not refused, it is
+ * *stalled*, so a missing cookie jar reads as "timed out" and sends everyone
+ * hunting for a network problem. An expired jar behaves the same way. Both are
+ * cookie problems with a timeout's face, so a timeout says which one it is
+ * rather than leaving the logs to be read backwards.
+ *
+ * toolError() already covers the failures that arrive labelled as auth
+ * problems; this covers the ones that don't.
+ */
+function extractionFailure(err, platform) {
+  const payload = {
+    error: err.message + (err.retried ? " (tried twice)" : ""),
+    code: err.code || "unknown",
+    detail: err.detail || null
+  };
+
+  if (platform !== "instagram" || !RETRYABLE_CODES.has(payload.code)) return payload;
+
+  const have = cookiesForDomain("instagram.com");
+  payload.error += have
+    ? ` [${have} instagram.com cookies were sent from ${COOKIE_STATUS.source}. ` +
+      "If this keeps happening the session has most likely expired -- export a fresh cookies.txt.]"
+    : " [No instagram.com cookies are loaded, so this request was anonymous. " +
+      "Instagram throttles anonymous requests from datacenter IPs by stalling them, " +
+      "which is what a timeout here usually means. Add instagram.com entries to cookies.txt.]";
+  payload.cookies = cookieSummary();
+
+  return payload;
+}
+
 const humanSize = (bytes) => {
   if (!bytes || bytes < 0) return null;
   const mb = bytes / 1048576;
@@ -1528,9 +1949,11 @@ app.get("/api/health", (_req, res) => res.json({
   ok: true,
   cookies: cookieSummary(),
   jsRuntime: JS_RUNTIME_STATUS,
-  // Photo/carousel support, separately from video: it has its own binary and
-  // its own way of being absent.
-  galleryDl: GALLERYDL_STATUS
+  // Instagram's extraction budget, since it is the one that gets hit.
+  instagramTimeoutMs: IG_TIMEOUT_MS,
+  /* Photo support, separately from video: it has its own binary, its own way
+     of being absent, and losing it costs images only. */
+  galleryDl: { ...GALLERYDL_STATUS, timeoutMs: GALLERYDL_TIMEOUT_MS, usedFor: "instagram.com/p/ only" }
 }));
 
 /* --------------------------------------------------------------------------
@@ -1545,54 +1968,96 @@ app.get("/api/info", rateLimit, async (req, res) => {
     return res.status(400).json({ error: "Unsupported link. Use TikTok, Instagram, Facebook or YouTube.", code: "unsupported_link", detail: null });
   }
 
-  /* Instagram only, and only for URLs that address a post. The item list is
-     what makes a mixed carousel describable at all, and it is asked for
-     alongside the yt-dlp extraction rather than after it -- both are network
-     round-trips, and running them in sequence would double the wait on the one
-     platform that needs both. Nothing else changes shape: TikTok, Facebook and
-     YouTube never enter this branch. */
+  /* Instagram only, and only for URLs that address a post: enumerating a
+     carousel means letting yt-dlp treat the post as the playlist it is. It
+     costs nothing on a single-item post -- there is no playlist to walk -- and
+     nothing else changes shape, because TikTok, Facebook and YouTube never
+     enter this branch and keep --no-playlist exactly as before. */
   const wantsItems = platform === "instagram" && IG_POST_RE.test(String(url));
 
-  /* .catch() even though galleryItems() already swallows everything: this
-     promise is started before the yt-dlp await and is not awaited on every
-     path out of the handler, and an unhandled rejection terminates the process
-     on modern Node. A belt on top of the braces costs nothing and the failure
-     mode it prevents is the whole server going down. */
-  const itemsPromise = wantsItems
-    ? galleryItems(url).catch(() => [])
+  /* The images. Started here rather than awaited here so it overlaps the yt-dlp
+     extraction instead of following it -- both are network round-trips and
+     Instagram is the platform that can least afford them in series.
+
+     Only instagram.com/p/ ever gets this far: galleryItems() returns [] for
+     everything else, so a reel spawns nothing, and TikTok, Facebook and
+     YouTube never reach this line at all.
+
+     .catch() belts the braces. galleryItems() already swallows everything, but
+     this promise is not awaited on every path out of the handler, and an
+     unhandled rejection takes the process down on modern Node. */
+  const galleryCtl = {};
+  const photosPromise = wantsItems
+    ? galleryItems(url, GALLERYDL_TIMEOUT_MS, galleryCtl).catch(() => [])
     : Promise.resolve([]);
 
   try {
-    let info;
+    let info = null;
+    let ytdlpError = null;
     try {
       /* Extract against the default download selector, not bare. The response
          is identical either way, but the dump then also carries the plan the
          download route needs -- so the click that follows this call costs no
          extraction at all. */
-      info = await ytdlpJson(url, 25_000, FORMATS.hd);
+      info = await ytdlpJson(url, timeoutFor(platform), FORMATS.hd, extractOpts(platform, wantsItems));
       rememberPlan(url, FORMATS.hd, info);
     } catch (err) {
-      // yt-dlp parsed the post and found only images. That isn't a failure --
-      // it's the one case where the photo route can take over. Any other error
-      // is a real error and still propagates.
+      /* "There is no video in this post" is not a failure -- the post parsed,
+         the session worked, it simply holds images. For an /p/ URL that is the
+         hand-off to gallery-dl below. Anything else is a real error. */
       if (!NO_VIDEO_RE.test(err.stderr || "")) throw err;
+      ytdlpError = err;
+      console.log(`[${platform}] no video in ${url}; waiting on gallery-dl for images`);
+    }
 
-      const items = wantsItems ? await itemsPromise : [];
-      const photos = items.length
-        ? items.map((it) => it.url)
-        : await galleryUrls(url);
+    /* Images win the item list when there are any.
 
-      const shape = describePost(items, photos, url, platform);
+       gallery-dl sees every node in a post; yt-dlp sees only the video ones.
+       So on a mixed carousel yt-dlp's list is a strict subset, and taking it
+       would silently drop the photos -- which is the bug this exists to fix.
+       When gallery-dl found nothing (not installed, timed out, failed), the
+       yt-dlp list is what is left and the post still shows its videos. */
+    const photos = await photosPromise;
+    const items = photos.length ? photos : (wantsItems && info ? instagramItems(info) : []);
+    const itemSource = photos.length ? "gallery-dl" : "yt-dlp";
+
+    if (wantsItems) {
+      console.log(
+        `[${platform}] ${url}: ${items.length} item(s) from ${itemSource}` +
+        (photos.length && info ? ` (yt-dlp saw ${instagramItems(info).length} video item(s))` : "")
+      );
+    }
+
+    /* An image-only post: yt-dlp declined and gallery-dl is all there is. This
+       is the shape the photo route has always returned, so a client that
+       handled photo posts before handles this one unchanged. */
+    if (!info) {
+      if (!items.length) {
+        console.warn(`[${platform}] no video and no images recoverable for ${url}`);
+        return res.status(GALLERYDL_STATUS.available ? 502 : 501).json({
+          error: GALLERYDL_STATUS.available
+            ? "That post holds no video, and its images could not be read."
+            : "That post holds only images, and gallery-dl -- which reads them -- is not installed on this server.",
+          code: GALLERYDL_STATUS.available ? "no_items" : "gallerydl_missing",
+          detail: ytdlpError?.detail || null
+        });
+      }
+
+      const shape = describePost(items, url, platform);
+      const photoCount = items.filter((i) => i.type === "photo").length;
       return res.json({
         kind: "photo",
         platform,
         platformName: PLATFORMS[platform].name,
-        title: photos.length > 1 ? `${PLATFORMS[platform].name} photo carousel` : `${PLATFORMS[platform].name} photo`,
-        count: photos.length,
-        quality: photos.length > 1 ? `${photos.length} photos` : "Original",
+        title: items.length > 1
+          ? `${PLATFORMS[platform].name} carousel`
+          : `${PLATFORMS[platform].name} photo`,
+        count: items.length,
+        quality: items.length > 1 ? `${items.length} items` : "Original",
         size: null,      // the CDN reports it per-image; not worth 10 HEAD requests
         duration: null,
-        thumbnail: photos[0],
+        thumbnail: items[0].thumbnail || items[0].url,
+        photoCount,
         ...shape
       });
     }
@@ -1604,32 +2069,31 @@ app.get("/api/info", rateLimit, async (req, res) => {
     const height = info.height ||
       Math.max(0, ...(info.formats || []).map((f) => f.height || 0));
 
-    /* A video post can still be a carousel that happens to lead with a video --
-       yt-dlp reports only the one it picked, so the item list is what reveals
-       the rest. Awaited here rather than earlier so a slow or failing lookup
-       cannot hold up a plain video response. */
-    const items = wantsItems ? await itemsPromise : [];
-    const shape = describePost(items, items.map((it) => it.url), url, platform);
+    const shape = describePost(items, url, platform);
+
+    // A carousel's playlist dict carries no thumbnail of its own; its first
+    // item does. Same for the title, which otherwise reads "Untitled video".
+    const lead = (info.entries || []).find(Boolean) || info;
 
     res.json({
       kind: shape.postType === "carousel" ? "carousel" : "video",
       platform,
       platformName: PLATFORMS[platform].name,
-      title: info.title || info.description?.slice(0, 90) || "Untitled video",
-      uploader: info.uploader || info.channel || null,
-      duration: humanTime(info.duration),
+      title: info.title || lead.title || info.description?.slice(0, 90) || "Untitled video",
+      uploader: info.uploader || info.channel || lead.uploader || null,
+      duration: humanTime(info.duration ?? lead.duration),
       quality: height ? `${height}p${height >= 720 ? " • HD" : ""}` : "Best available",
       size: humanSize(size),
-      thumbnail: info.thumbnail || null,
+      thumbnail: info.thumbnail || lead.thumbnail || null,
       ...shape
     });
   } catch (err) {
+    /* The answer is already known, so nothing is waiting on the images any
+       more -- and leaving gallery-dl running would hold a connection open to
+       the platform that is already refusing us. */
+    abortGallery(galleryCtl);
     console.error(`[${platform}] /api/info failed (${err.code || "?"}): ${err.stderr || err.message}`);
-    res.status(502).json({
-      error: err.message,
-      code: err.code || "unknown",
-      detail: err.detail || null
-    });
+    res.status(502).json(extractionFailure(err, platform));
   }
 });
 
@@ -1650,7 +2114,7 @@ app.get("/api/info", rateLimit, async (req, res) => {
  * /tmp is ephemeral anyway. The alternative (buffer in RAM) would not survive
  * a 512MB box.
  */
-async function streamMerged(req, res, url, format, platform, allowRetry = true) {
+async function streamMerged(req, res, url, format, platform, allowRetry = true, opts = {}) {
   let dir;
   try {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "vh-mux-"));
@@ -1661,7 +2125,7 @@ async function streamMerged(req, res, url, format, platform, allowRetry = true) 
   /* The jar gets its own directory, deliberately not this one: the merged file
      is found by reading `dir` back and taking what's there, so anything else
      dropped alongside it could be streamed to the visitor as their video. */
-  const jar = cookieSession();
+  const jar = cookieSession(platform);
 
   // %(ext)s, not a fixed .mp4: yt-dlp names the merged file itself, and
   // guessing wrong means streaming a file that isn't there.
@@ -1692,13 +2156,19 @@ async function streamMerged(req, res, url, format, platform, allowRetry = true) 
     // most of the wall-clock win here, and it matters more than it used to now
     // that nothing reaches the visitor until the merge finishes.
     "--concurrent-fragments", "8",
-    "--no-playlist",
+    /* --no-playlist unless a specific carousel item was asked for, in which
+       case --playlist-items names it. yt-dlp indexes from 1; the API from 0,
+       and the conversion happens at the one call site that has the index. */
+    ...(opts.playlistItem
+      ? ["--playlist-items", String(opts.playlistItem)]
+      : ["--no-playlist"]),
     "--no-part",
-    "--socket-timeout", "15"
+    "--socket-timeout", socketTimeoutFor(platform)
   );
   // Codec preference, applied to every branch of the selector at once. See the
   // format-selection note above for why this is a sort and not a filter.
   if (FORMAT_SORT) args.push("-S", FORMAT_SORT);
+  if (opts.playerClient) args.push(...playerClientArgs(opts.playerClient));
   if (FFMPEG_LOCATION) args.push("--ffmpeg-location", FFMPEG_LOCATION);
   args.push(...jar.args, "-o", template, url);
 
@@ -1746,11 +2216,30 @@ async function streamMerged(req, res, url, format, platform, allowRetry = true) 
          satisfied, drop it and let yt-dlp pick. Nothing has been written yet
          -- headers on this path are only set once the file is complete -- so
          the retry is invisible to the visitor. */
-      if (allowRetry && format && classifyError(err) === "format_unavailable" && !res.headersSent) {
+      // Not `code` -- that is the close handler's exit-status parameter, and
+      // shadowing it here puts every use above this line in the temporal dead
+      // zone. Cost of learning that: one crashed server.
+      const failureCode = classifyError(err);
+
+      if (allowRetry && format && failureCode === "format_unavailable" && !res.headersSent) {
         console.warn(
           `[${platform}] selector "${format}" not satisfiable; retrying with yt-dlp's own choice`
         );
-        return streamMerged(req, res, url, null, platform, false);
+        return streamMerged(req, res, url, null, platform, false, opts);
+      }
+
+      /* YouTube refused the session on the download itself. Same fallback the
+         metadata call makes, for the same reason -- and available here too,
+         because nothing has been written yet: headers on this path are only
+         set once the file is complete, so the retry is invisible. */
+      if (canRetryAsClient(platform, failureCode, opts.playerClient) && !res.headersSent) {
+        console.warn(
+          `[${platform}] refused (${failureCode}) on the merge path; ` +
+          `retrying as player_client=${YT_FALLBACK_CLIENT}`
+        );
+        return streamMerged(req, res, url, format, platform, allowRetry, {
+          ...opts, playerClient: YT_FALLBACK_CLIENT
+        });
       }
 
       if (!res.headersSent) res.status(502).json(toolError(err, "yt-dlp"));
@@ -1849,7 +2338,7 @@ async function streamMerged(req, res, url, format, platform, allowRetry = true) 
  * the routing note in /api/download. Anything else still takes the merge path,
  * because that is what can guarantee a seekable, remuxed MP4.
  */
-function streamProgressive(req, res, url, plan, title, platform, selector) {
+function streamProgressive(req, res, url, plan, title, platform, selector, opts = {}) {
   const filename = safeFilename(title, "mp4");
 
   res.setHeader("Content-Type", "video/mp4");
@@ -1864,7 +2353,7 @@ function streamProgressive(req, res, url, plan, title, platform, selector) {
      Content-Length that disagrees with the body truncates the file, which is
      a far worse outcome than a download with no percentage on it. */
 
-  const jar = cookieSession();
+  const jar = cookieSession(platform);
 
   /* No format id here, deliberately. A format id is a fact about one
      extraction, not a permanent name: YouTube hands different clients
@@ -1885,9 +2374,14 @@ function streamProgressive(req, res, url, plan, title, platform, selector) {
     "-f", "b[ext=mp4]",
     "--no-playlist",
     "--concurrent-fragments", "8",
-    "--socket-timeout", "15"
+    "--socket-timeout", socketTimeoutFor(platform)
   ];
   if (FORMAT_SORT) args.push("-S", FORMAT_SORT);
+  /* Same client the plan was built as. A format list is a fact about one
+     client, so downloading as a different one is shopping from the wrong
+     catalogue -- and on YouTube that surfaces as "Requested format is not
+     available" for a reason nobody can act on. */
+  if (opts.playerClient) args.push(...playerClientArgs(opts.playerClient));
   args.push(...jar.args, "-o", "-", url);
 
   const dl = spawnYtdlp(args, `${platform}:stream`);
@@ -1942,7 +2436,7 @@ function streamProgressive(req, res, url, plan, title, platform, selector) {
     if (!res.headersSent) {
       plans.delete(planKey(url, selector));
       console.log(`[${platform}] stream attempt failed, retrying via the merge path`);
-      return streamMerged(req, res, url, selector, platform);
+      return streamMerged(req, res, url, selector, platform, true, opts);
     }
 
     // Bytes are already out; all that's left is to cut the stream and let the
@@ -1952,53 +2446,127 @@ function streamProgressive(req, res, url, plan, title, platform, selector) {
 }
 
 /**
- * Stream one image out of a post.
+ * Download one item out of a post: a photo, or one video from a carousel.
  *
- * Proxied rather than redirected to the CDN for the same reason the video
- * route is: only we can set Content-Disposition, so a 302 would open the photo
- * in a tab instead of saving it -- which is the whole point on a phone.
+ * The route is unchanged -- `?format=photo&i=N` is what /api/info has always
+ * advertised and what the frontend already sends.
+ *
+ * The index has to mean the same thing here as it did in the /api/info
+ * response that produced the link, so this resolves the item list by the
+ * *same* precedence: gallery-dl first for an /p/ URL, yt-dlp's entries
+ * otherwise. Both calls normally hit the cache /api/info populated seconds
+ * ago, so the click costs nothing and cannot see a different list.
+ *
+ * Then the source decides the route, and the two are not interchangeable:
+ *
+ *   gallery-dl  ->  proxy the CDN URL. It is the only route that can serve an
+ *                   image at all, and its indices count every node in the post.
+ *   yt-dlp      ->  `--playlist-items N+1` down the ordinary merge path, whose
+ *                   indices count only the video nodes.
+ *
+ * Crossing them would hand out the wrong item on a mixed carousel.
  */
-async function streamPhoto(req, res, url, index, platform) {
-  let photos;
-  try {
-    photos = await galleryUrls(url);
-  } catch (err) {
-    return res.status(502).json({
-      error: err.message,
-      code: err.code || "unknown",
-      detail: err.detail || null
-    });
+async function streamItem(req, res, url, index, platform) {
+  // Empty for anything that is not instagram.com/p/, which is what keeps
+  // reels, TikTok and Facebook off this path entirely.
+  const photos = await galleryItems(url).catch(() => []);
+
+  let items = photos;
+  let source = "gallery-dl";
+
+  if (!items.length) {
+    let info = cachedPlan(url, FORMATS.hd);
+    try {
+      if (!info) {
+        info = await ytdlpJson(url, timeoutFor(platform), FORMATS.hd, extractOpts(platform, true));
+        rememberPlan(url, FORMATS.hd, info);
+      }
+    } catch (err) {
+      if (NO_VIDEO_RE.test(err.stderr || "")) {
+        console.warn(`[${platform}] no video in ${url} and no images from gallery-dl`);
+        return res.status(GALLERYDL_STATUS.available ? 502 : 501).json({
+          error: GALLERYDL_STATUS.available
+            ? "That post holds no video, and its images could not be read."
+            : "That post holds only images, and gallery-dl -- which reads them -- is not installed on this server.",
+          code: GALLERYDL_STATUS.available ? "no_items" : "gallerydl_missing",
+          detail: err.detail || null
+        });
+      }
+      console.error(`[${platform}] item lookup failed (${err.code || "?"}): ${err.stderr || err.message}`);
+      return res.status(502).json(extractionFailure(err, platform));
+    }
+    items = instagramItems(info);
+    source = "yt-dlp";
   }
 
-  if (index >= photos.length) {
+  if (!items.length) {
+    return res.status(502).json({
+      error: "That post reported no downloadable items.",
+      code: "no_items",
+      detail: null
+    });
+  }
+  if (index >= items.length) {
     return res.status(404).json({
-      error: `Photo index ${index} out of range; that post has ${photos.length}.`,
+      error: `Item index ${index} out of range; that post has ${items.length}.`,
       code: "bad_photo_index",
       detail: null
     });
   }
 
-  const target = photos[index];
-  // galleryUrls() already filtered, but re-check at the line that actually
-  // performs the fetch -- that's the one that matters.
+  /* Named after the post's shortcode: a carousel entry's own title is usually
+     the caption, repeated identically for every item, which would have a
+     visitor saving five files with the same name. */
+  const shortcode = (url.match(/\/(?:p|reel|reels|tv)\/([\w-]+)/) || [])[1] || platform;
+  const name = items.length > 1 ? `${shortcode}-${index + 1}` : shortcode;
+  res.locals.title = name;
+
+  const item = items[index];
+  console.log(`[${platform}] item ${index} of ${items.length} (${item.type}) via ${source}`);
+
+  if (source === "yt-dlp") {
+    return streamMerged(req, res, url, null, platform, true, { playlistItem: index + 1 });
+  }
+  return streamProxied(req, res, item, name, platform);
+}
+
+/**
+ * Proxy one media file straight from Instagram's CDN.
+ *
+ * Proxied rather than redirected for the same reason the video route is: only
+ * we can set Content-Disposition, so a 302 would open the photo in a tab
+ * instead of saving it -- which is the whole point on a phone.
+ *
+ * Nothing is transcoded. For a photo there is nothing to do, and for a video
+ * this is Instagram's own file: a single muxed MP4 with its audio track
+ * already in it, which is exactly what should be handed over. Remuxing it
+ * would cost a round-trip through ffmpeg to produce the same thing.
+ */
+async function streamProxied(req, res, item, name, platform) {
+  const target = item.url;
+
+  // galleryItems() already filtered, but re-check at the line that actually
+  // performs the fetch -- that is the one that matters.
   if (!isAllowedMedia(target)) {
+    console.error(`[${platform}] refusing to fetch media from an unexpected host`);
     return res.status(502).json({ error: "Unexpected media host.", code: "blocked_media_host", detail: null });
   }
 
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 25_000);
+  const timer = setTimeout(() => ctrl.abort(), 30_000);
   res.on("close", () => ctrl.abort()); // visitor cancelled -> drop the upstream fetch
+
+  const host = (() => { try { return new URL(target).host; } catch { return "the CDN"; } })();
 
   let upstream;
   try {
     upstream = await fetch(target, { signal: ctrl.signal });
   } catch (e) {
     clearTimeout(timer);
-    const host = (() => { try { return new URL(target).host; } catch { return "the CDN"; } })();
-    console.error(`[${platform}] photo fetch failed from ${host}: ${e.message}`);
+    console.error(`[${platform}] media fetch failed from ${host}: ${e.message}`);
     if (!res.headersSent) {
       res.status(502).json({
-        error: `Could not reach ${host}: ${e.name === "AbortError" ? "timed out after 25s" : e.message}`,
+        error: `Could not reach ${host}: ${e.name === "AbortError" ? "timed out after 30s" : e.message}`,
         code: e.name === "AbortError" ? "timeout" : "network",
         detail: null
       });
@@ -2010,10 +2578,12 @@ async function streamPhoto(req, res, url, index, platform) {
   clearTimeout(timer);
 
   if (!upstream.ok || !upstream.body) {
-    const host = (() => { try { return new URL(target).host; } catch { return "the CDN"; } })();
-    console.error(`[${platform}] photo CDN ${host} returned HTTP ${upstream.status}`);
+    console.error(`[${platform}] CDN ${host} returned HTTP ${upstream.status} for a ${item.type} item`);
     return res.status(502).json({
-      error: `${host} returned HTTP ${upstream.status} ${upstream.statusText || ""}`.trim(),
+      error: `${host} returned HTTP ${upstream.status} ${upstream.statusText || ""}`.trim() +
+        (upstream.status === 403
+          ? " -- signed CDN URLs expire, so re-running /api/info usually fixes this"
+          : ""),
       code: `http_${upstream.status}`,
       detail: null
     });
@@ -2023,7 +2593,7 @@ async function streamPhoto(req, res, url, index, platform) {
      media item whatever it is, so the extension follows the CDN's content-type
      rather than assuming an image -- naming an mp4 ".jpg" produces a file the
      visitor's device refuses to open, for no reason they can see. */
-  const type = upstream.headers.get("content-type") || "image/jpeg";
+  const type = upstream.headers.get("content-type") || (item.type === "video" ? "video/mp4" : "image/jpeg");
   const ext =
     type.includes("mp4") ? "mp4" :
     type.includes("quicktime") ? "mov" :
@@ -2033,16 +2603,11 @@ async function streamPhoto(req, res, url, index, platform) {
     type.includes("webp") ? "webp" :
     type.includes("gif") ? "gif" : "jpg";
 
-  // Name the file after the post's shortcode: the CDN URL is a signed blob
-  // with nothing human-readable in it, and photo posts carry no title.
-  const shortcode = (url.match(/\/(?:p|reel|reels|tv)\/([\w-]+)/) || [])[1] || platform;
-  const filename = safeFilename(
-    photos.length > 1 ? `${shortcode}-${index + 1}` : shortcode,
-    ext
-  );
+  const filename = safeFilename(name, ext);
+  const len = upstream.headers.get("content-length");
+  console.log(`[${platform}] proxying ${item.type} as ${type}${len ? ` (${len} bytes)` : ""}`);
 
   res.setHeader("Content-Type", type);
-  const len = upstream.headers.get("content-length");
   if (len) res.setHeader("Content-Length", len);
   res.setHeader(
     "Content-Disposition",
@@ -2071,16 +2636,20 @@ app.get("/api/download", rateLimit, async (req, res) => {
     return res.status(400).json({ error: "Unsupported link.", code: "unsupported_link", detail: null });
   }
 
-  /* Photos never touch yt-dlp: it can't see them. One image per request
-     (?i=N) rather than a zip -- zipping would mean buffering a whole carousel
-     to build the archive, and the streaming rule below exists precisely to
-     avoid holding media in a 512MB box's memory. */
+  /* One carousel item per request (?i=N) rather than a zip -- zipping would
+     mean buffering the whole post to build the archive, and the streaming rule
+     below exists precisely to avoid holding media in a 512MB box's memory.
+
+     The name "photo" is what the frontend sends and what every /api/info
+     response has advertised, and it now means what it says again: for an
+     instagram.com/p/ post this really can be an image. It also still serves
+     the video items in a carousel, so the name is narrower than the route. */
   if (format === "photo") {
     const i = Number.parseInt(req.query.i ?? "0", 10);
     if (!Number.isInteger(i) || i < 0) {
       return res.status(400).json({ error: "Bad photo index.", code: "bad_photo_index", detail: null });
     }
-    return streamPhoto(req, res, url, i, platform);
+    return streamItem(req, res, url, i, platform);
   }
 
   if (!FORMATS[format]) {
@@ -2094,7 +2663,7 @@ app.get("/api/download", rateLimit, async (req, res) => {
   let info = cachedPlan(url, selector);
   if (!info) {
     try {
-      info = await ytdlpJson(url, 20_000, selector);
+      info = await ytdlpJson(url, timeoutFor(platform), selector, extractOpts(platform));
       rememberPlan(url, selector, info);
     } catch {
       // Non-fatal: a generic filename and the safe route beat failing outright.
@@ -2134,17 +2703,27 @@ app.get("/api/download", rateLimit, async (req, res) => {
       ? `cookies=${cookiesForDomain(domain)} ${domain}`
       : "cookies=none";
 
+    /* If the metadata came back only because a fallback player client was
+       used, the download has to be made as that same client -- the formats in
+       the plan are its formats. Carried on the dump so it survives the plan
+       cache; null for every ordinary extraction, which is all of them until
+       YouTube refuses a session. */
+    const dlOpts = info?.__playerClient ? { playerClient: info.__playerClient } : {};
+    const clientNote = dlOpts.playerClient ? `, client=${dlOpts.playerClient}` : "";
+
     if (canStream) {
-      console.log(`[${platform}] streaming ${plan.formatId} (${plan.vcodec}) — no merge needed, ${cookieNote}`);
-      return streamProgressive(req, res, url, plan, title, platform, selector);
+      console.log(
+        `[${platform}] streaming ${plan.formatId} (${plan.vcodec}) — no merge needed, ${cookieNote}${clientNote}`
+      );
+      return streamProgressive(req, res, url, plan, title, platform, selector, dlOpts);
     }
 
     console.log(
       `[${platform}] merging ${plan ? plan.formatId : "?"} — ` +
       (plan ? `${plan.needsMerge ? "two streams" : `ext=${plan.ext}`}` : "no plan") +
-      `, ${cookieNote}`
+      `, ${cookieNote}${clientNote}`
     );
-    return streamMerged(req, res, url, selector, platform);
+    return streamMerged(req, res, url, selector, platform, true, dlOpts);
   }
 
   const filename = safeFilename(title, "mp3");
@@ -2160,12 +2739,17 @@ app.get("/api/download", rateLimit, async (req, res) => {
   /* The audio of a login-walled video is just as login-walled as the video, so
      this needs the session too -- an MP3 of a post the visitor could only reach
      signed in fails the same way the MP4 would without it. */
-  const jar = cookieSession();
+  const jar = cookieSession(platform);
 
   const dl = spawnYtdlp([
     "-f", FORMATS.mp3,
     "--no-playlist",
-    "--socket-timeout", "15",
+    "--socket-timeout", socketTimeoutFor(platform),
+    // Same client the metadata was read as, when a fallback was needed. No
+    // retry loop here: this path commits its headers before the first byte, so
+    // there is nothing to recover to -- the extraction above is where a
+    // refusal gets caught, and this just follows its choice.
+    ...(info?.__playerClient ? playerClientArgs(info.__playerClient) : []),
     ...jar.args,
     "-o", "-",           // stream to stdout
     url
@@ -2265,9 +2849,19 @@ if (require.main === module) {
 
 module.exports = {
   app,
+  instagramItems,
   parseGalleryItems,
+  isAllowedMedia,
+  IG_PHOTO_POST_RE,
   classifyPostType,
   itemTypeFrom,
   describePost,
+  extractOpts,
+  timeoutFor,
+  socketTimeoutFor,
+  canRetryAsClient,
+  playerClientArgs,
+  classifyError,
+  YT_FALLBACK_CLIENT,
   IG_POST_RE
 };

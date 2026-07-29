@@ -206,24 +206,25 @@ async function installFfmpeg() {
 /* --------------------------------------------------------------------------
    gallery-dl
 
-   This is the one that caused "spawn gallery-dl ENOENT": the Dockerfile
-   installs it, this script did not, so a native-runtime deploy had yt-dlp and
-   ffmpeg and no gallery-dl at all.
+   Serves Instagram photo posts and the images inside carousels, and nothing
+   else -- server.js only ever spawns it for an instagram.com/p/ URL. yt-dlp
+   cannot replace it: it is video-only, an image post makes it exit with
+   "There is no video in this post", and no format selector changes that
+   because there is no video track to select.
 
-   It cannot be installed the way the other two are. yt-dlp and ffmpeg publish
-   static binaries; gallery-dl publishes none -- checked every release from
-   v1.32.3 to v1.32.8 and all of them carry zero assets, and
-   /releases/download/v1.32.6/gallery-dl.bin is a 404. It is a Python package
-   and has to be installed as one.
+   It cannot be installed the way yt-dlp and ffmpeg are, either. Those publish
+   static binaries; gallery-dl publishes none -- every release from v1.32.3 to
+   v1.32.8 carries zero assets, and /releases/download/v1.32.6/gallery-dl.bin
+   is a 404. It is a Python package and has to be installed as one.
 
    So: a venv, exactly as the Dockerfile does it. A venv rather than a plain
    `pip install --user` because Debian and Ubuntu mark the system Python
    externally-managed (PEP 668), which makes a bare pip refuse to run.
 
-   Failure here is deliberately NOT fatal. gallery-dl serves Instagram photo
-   and carousel posts; every video download on all four platforms goes through
-   yt-dlp and is unaffected. Losing photos is worth reporting loudly and worth
-   nobody's deploy failing over.
+   Failure here is deliberately NOT fatal. No Python on the host means no
+   gallery-dl, which costs Instagram photo posts -- and every video download on
+   all four platforms goes through yt-dlp and is unaffected. That is worth
+   reporting loudly and worth nobody's deploy failing over.
    -------------------------------------------------------------------------- */
 
 const GALLERYDL_VERSION = "1.32.6"; // matches the Dockerfile's pin
@@ -256,7 +257,7 @@ async function installGalleryDl() {
   if (!python) {
     console.warn(
       "[install-tools] WARNING: no python3 on this host, so gallery-dl cannot be installed. " +
-      "Instagram photo and carousel posts will not work. Video downloads are unaffected."
+      "Instagram photo posts will not work. Videos, reels, TikTok, Facebook and YouTube are unaffected."
     );
     return;
   }
@@ -282,7 +283,7 @@ async function installGalleryDl() {
   } catch (err) {
     console.warn(
       `[install-tools] WARNING: gallery-dl install failed (${err.message}). ` +
-      "Instagram photo and carousel posts will not work. Video downloads are unaffected."
+      "Instagram photo posts will not work. Video downloads are unaffected."
     );
     try { fs.rmSync(venv, { recursive: true, force: true }); } catch { /* best effort */ }
   }

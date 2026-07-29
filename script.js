@@ -613,11 +613,19 @@
     // report duration/filesize for every video on every platform.
     const d = info || {};
 
-    // An Instagram /p/ link can be a photo post. Those have no duration, no
-    // bitrate and no audio track, so the video furniture — play button,
-    // runtime, the HD download — is meaningless and gets swapped out.
-    const isPhoto = d.kind === "photo";
-    card.classList.toggle("is-photo", isPhoto);
+    /* An Instagram /p/ link comes back in one of three shapes, and two of them
+       need the per-item treatment rather than the video furniture:
+
+         "photo"     an image post, one picture or several
+         "carousel"  a post holding more than one item, photos and video mixed
+         "video"     a reel, or a post with a single video in it
+
+       Both of the first two get one button per item, because the server serves
+       one item per request (?i=N). The play button, runtime and single HD
+       download only make sense for the third. Missing the "carousel" case is
+       what made a mixed post show one video button and hide its photos. */
+    const isMulti = d.kind === "photo" || d.kind === "carousel";
+    card.classList.toggle("is-photo", isMulti);
 
     // ---- Fill in the details ----
     const tag = $("#resultPlatformTag");
@@ -628,13 +636,16 @@
     setText("#metaPlatform", d.platformName || p.name);
     setText("#metaQuality", d.quality || p.quality);
     setText("#metaSize", d.size || (info ? "Unknown" : p.size));
-    setText("#previewBadge", isPhoto ? (d.count > 1 ? `${d.count} photos` : "Photo") : "HD");
+    // itemCount is the carousel's; count is the photo post's. Either way it is
+    // how many buttons are about to appear, so the badge says so.
+    const itemTotal = d.itemCount || d.count || 0;
+    setText("#previewBadge", isMulti ? (itemTotal > 1 ? `${itemTotal} items` : "Photo") : "HD");
     // Guard the fallback: `d.duration` is null for a photo, and without the
-    // isPhoto check it would land on PLATFORMS' canned "00:32" runtime.
-    setText("#previewDuration", isPhoto ? "" : (d.duration || p.duration));
+    // isMulti check it would land on PLATFORMS' canned "00:32" runtime.
+    setText("#previewDuration", isMulti ? "" : (d.duration || p.duration));
     setThumbnail(d.thumbnail);
 
-    renderDownloadButtons(key, url, d, isPhoto);
+    renderDownloadButtons(key, url, d, isMulti);
 
     /* ---- Reveal ----
        Just show it. This used to add .in, force a reflow to replay a 3D
@@ -688,23 +699,24 @@
   /**
    * Point the download buttons at the API.
    *
-   * A photo post gets one button per image instead of a single "download all":
-   * the server streams one image per request (?i=N), because zipping a carousel
-   * would mean buffering the whole thing in a 512MB box to build the archive.
+   * A multi-item post gets one button per item instead of a single "download
+   * all": the server streams one item per request (?i=N), because zipping a
+   * carousel would mean buffering the whole thing in a 512MB box to build the
+   * archive.
    *
    * The static HD button is hidden rather than rewritten, so the video path
    * keeps its markup and its click handler untouched.
    */
-  function renderDownloadButtons(key, url, d, isPhoto) {
+  function renderDownloadButtons(key, url, d, isMulti) {
     const grid = $(".dl-grid");
     const q = encodeURIComponent(url);
 
-    // Clear buttons injected for a previous photo post — the panel is reused.
+    // Clear buttons injected for a previous multi-item post — the panel is reused.
     if (grid) $$(".dl-photo", grid).forEach((el) => el.remove());
     const hd = $("#dlHd");
-    if (hd) hd.hidden = isPhoto;
+    if (hd) hd.hidden = isMulti;
 
-    if (!isPhoto) {
+    if (!isMulti) {
       if (API_BASE) {
         // Real endpoint — the server streams the file back with a
         // Content-Disposition header, so the browser saves rather than plays it.
@@ -716,16 +728,29 @@
     }
 
     if (!grid) return;
-    const count = Math.max(1, d.count || 1);
 
-    for (let i = 0; i < count; i++) {
+    /* Prefer the server's item list: it carries each item's own type, so a
+       video inside a carousel is labelled as a video rather than as "Photo 2".
+       `count` is the older, typeless shape and is still honoured — an image
+       post that predates items[] renders exactly as it used to. */
+    const items = Array.isArray(d.items) && d.items.length
+      ? d.items
+      : Array.from({ length: Math.max(1, d.count || 1) }, () => ({ type: "photo" }));
+
+    items.forEach((item, i) => {
       const a = document.createElement("a");
       a.className = "dl-btn dl-hd dl-photo";
-      a.href = `${API_BASE}/api/download?url=${q}&format=photo&i=${i}`;
+      /* The index the server advertised, not the loop counter. They agree
+         today, but the server owns the numbering -- it is what ?i=N is
+         resolved against -- so deferring to it keeps them from ever drifting. */
+      const idx = Number.isInteger(item.index) ? item.index : i;
+      a.href = `${API_BASE}/api/download?url=${q}&format=photo&i=${idx}`;
       a.setAttribute("download", "");
 
-      const label = count > 1 ? `Photo ${i + 1}` : "Download Photo";
-      const sub = count > 1 ? `${i + 1} of ${count}` : "Original";
+      const isVideo = item.type === "video";
+      const noun = isVideo ? "Video" : "Photo";
+      const label = items.length > 1 ? `${noun} ${i + 1}` : `Download ${noun}`;
+      const sub = items.length > 1 ? `${i + 1} of ${items.length}` : "Original";
       a.innerHTML = `${DL_ICON}<span>${label}</span><em>${sub}</em>`;
 
       // These are built after initResultPanel() wired the static buttons, so
@@ -737,7 +762,7 @@
       // Append: these used to be inserted before the Copy button, which was
       // the last cell in the grid. There's nothing after them now.
       grid.appendChild(a);
-    }
+    });
   }
 
   /**

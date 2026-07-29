@@ -24,9 +24,10 @@ RUN curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSI
     && chmod a+rx /usr/local/bin/yt-dlp \
     && yt-dlp --version
 
-# gallery-dl handles photo posts. yt-dlp is video-only: an Instagram /p/ photo
-# makes it exit with "There is no video in this post", and no format selector
-# changes that -- there is no video track to select.
+# gallery-dl handles Instagram photo posts, and only those: server.js spawns it
+# for instagram.com/p/ URLs and nothing else. yt-dlp is video-only -- an
+# Instagram /p/ photo makes it exit with "There is no video in this post", and
+# no format selector changes that, because there is no video track to select.
 #
 # Installed into a venv because Debian 12 marks the system Python
 # externally-managed (PEP 668), so a plain `pip install` refuses to run.
