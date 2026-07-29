@@ -630,6 +630,25 @@ function cookieSummary() {
   for (const [d, n] of Object.entries(s.perPlatform)) {
     if (n === 0) console.warn(`[cookies] none for ${d} - downloads from it will be anonymous`);
   }
+
+  /* Which jar Instagram ended up on, said plainly at boot.
+     One shared file is the normal case, and the dedicated file is opt-in --
+     but "is gallery-dl getting my cookies too?" was previously only answerable
+     by calling /api/health, and the logs are where it actually gets asked. */
+  const igCount = cookiesForDomain("instagram.com");
+  if (IG_COOKIE_STATUS.loaded) {
+    console.log(
+      `[cookies] instagram: using the dedicated jar ${IG_COOKIE_STATUS.source} ` +
+      `(${IG_COOKIE_STATUS.entries} entries) for both yt-dlp and gallery-dl`
+    );
+  } else {
+    console.log(
+      `[cookies] instagram: using the shared jar (${igCount} instagram.com ` +
+      "entries) for both yt-dlp and gallery-dl" +
+      (igCount === 0 ? " - but it holds none, so Instagram requests will be anonymous" : "")
+    );
+  }
+
   console.log("[cookies] ---------------------------------------------");
 })();
 
