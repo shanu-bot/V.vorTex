@@ -1011,6 +1011,85 @@
     if (el) el.textContent = String(new Date().getFullYear());
   }
 
+  /** Arrow controls for the card rails.
+
+      Mouse users get no swipe affordance and no visible scrollbar (the rails
+      hide theirs), so a rail that overflows — Features on most desktops —
+      needs buttons. Each rail gets a prev/next pair in its section head;
+      the pair hides itself entirely when the rail has nothing to scroll
+      (steps and devices fit at desktop width, and the platform grid stops
+      being a rail there at all). */
+  function initRailNav() {
+    const CHEVRON_L = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>';
+    const CHEVRON_R = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>';
+
+    $$(".steps-grid, .platform-grid, .feature-grid, .device-grid").forEach((rail) => {
+      const section = rail.closest("section");
+      const head = section ? section.querySelector(".section-head") : null;
+      if (!head) return;
+
+      const nav = document.createElement("div");
+      nav.className = "rail-nav";
+      nav.innerHTML =
+        `<button type="button" class="rail-btn rail-prev" aria-label="Scroll back">${CHEVRON_L}</button>` +
+        `<button type="button" class="rail-btn rail-next" aria-label="Scroll forward">${CHEVRON_R}</button>`;
+      head.appendChild(nav);
+
+      const prev = nav.querySelector(".rail-prev");
+      const next = nav.querySelector(".rail-next");
+
+      // One card plus the flex gap — the spacing between snap stops.
+      const step = () => {
+        const card = rail.firstElementChild;
+        const gap = parseFloat(getComputedStyle(rail).columnGap) || 0;
+        return card ? card.getBoundingClientRect().width + gap : rail.clientWidth * 0.8;
+      };
+
+      // Clicks target the snap lattice (k × step) with scrollTo, never a
+      // relative scrollBy. Two reasons, both review-verified in Chrome:
+      // the rail's clamped end position is usually OFF the lattice, and a
+      // relative jump from there gets resolved by mandatory snap to a stop
+      // up to two cards away; and a second click during the smooth scroll
+      // would compound from the mid-animation position and lose a card.
+      // `goal` remembers the in-flight target so rapid clicks chain from
+      // it; any scroll settling for 150ms clears it (that also forgets it
+      // after the user wheels/swipes the rail by hand).
+      let goal = null;
+      const go = (dir) => {
+        const stepW = step();
+        const base = goal !== null ? goal : rail.scrollLeft;
+        const idx = base / stepW;
+        const targetIdx = dir > 0 ? Math.floor(idx + 0.02) + 1 : Math.ceil(idx - 0.02) - 1;
+        const max = rail.scrollWidth - rail.clientWidth;
+        goal = Math.max(0, Math.min(max, targetIdx * stepW));
+        rail.scrollTo({ left: goal, behavior: prefersReduced ? "auto" : "smooth" });
+      };
+      prev.addEventListener("click", () => go(-1));
+      next.addEventListener("click", () => go(1));
+
+      // Disabling the button the keyboard user is focused on would drop
+      // their focus to <body>; hand it to the opposite arrow first (which
+      // is scrollable, hence enabled, whenever this end is exhausted).
+      const setDisabled = (btn, other, state) => {
+        if (state && !btn.disabled && document.activeElement === btn) other.focus();
+        btn.disabled = state;
+      };
+
+      let settle = null;
+      const sync = () => {
+        const max = rail.scrollWidth - rail.clientWidth;
+        nav.hidden = max < 8;                      // rail fits: nothing to move
+        setDisabled(prev, next, rail.scrollLeft < 8);
+        setDisabled(next, prev, rail.scrollLeft > max - 8);
+        clearTimeout(settle);
+        settle = setTimeout(() => { goal = null; }, 150);
+      };
+      rail.addEventListener("scroll", sync, { passive: true });
+      window.addEventListener("resize", sync, { passive: true });
+      sync();
+    });
+  }
+
   /* ========================================================================
      BOOT
      ======================================================================== */
@@ -1029,6 +1108,7 @@
     initRipple();
     initSmoothScroll();
     initYear();
+    initRailNav();
   }
 
   if (document.readyState === "loading") {

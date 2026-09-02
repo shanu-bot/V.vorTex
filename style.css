@@ -177,7 +177,11 @@ html { scrollbar-color: var(--red) #f0f0f0; scrollbar-width: thin; }
 
 .section {
   position: relative;
-  padding: clamp(4.5rem, 9vw, 8rem) 0;
+  /* Was clamp(4.5rem, 9vw, 8rem) — up to 256px of air between two sections
+     once both paddings met. Roughly half that: still a clear break, but the
+     next section's heading is visible before the previous one has fully
+     left the screen. */
+  padding: clamp(2.75rem, 5vw, 4.25rem) 0;
   z-index: 1;
 }
 
@@ -207,7 +211,10 @@ html { scrollbar-color: var(--red) #f0f0f0; scrollbar-width: thin; }
   font-size: clamp(1.9rem, 4.6vw, 3rem);
   font-weight: 800;
   line-height: 1.18;
-  letter-spacing: -0.02em;
+  /* All-caps titles: the tight -0.02em tracking that suits mixed case makes
+     capitals collide, so it relaxes to neutral here. */
+  text-transform: uppercase;
+  letter-spacing: 0;
 }
 
 .section-sub {
@@ -518,6 +525,21 @@ html { scrollbar-color: var(--red) #f0f0f0; scrollbar-width: thin; }
 
 .nav-menu { display: flex; align-items: center; gap: 0.35rem; }
 
+/* Desktop: links sit dead-centre in the bar (not merely between the logo and
+   the right edge), so they stay put whatever the logo's width. Below 821px
+   the menu is the fixed dropdown in the mobile-nav block — leave it alone. */
+@media (min-width: 821px) {
+  .nav-inner { position: relative; }
+  .nav-menu {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    /* Shrink-to-fit for an absolute box stops at the space right of left:50%,
+       which wrapped the links near 1000px. Size to the links themselves. */
+    width: max-content;
+  }
+}
+
 .nav-link {
   position: relative;
   display: inline-block;
@@ -571,11 +593,15 @@ html { scrollbar-color: var(--red) #f0f0f0; scrollbar-width: thin; }
    ========================================================================== */
 
 .hero {
-  min-height: calc(100vh - var(--nav-h));
+  /* No min-height: this was calc(100vh - var(--nav-h)) — a full-fold hero.
+     Once the content was top-aligned under the nav, every pixel of viewport
+     taller than the content became dead air between the chips and How It
+     Works (and the scroll cue that used to occupy that band is gone). The
+     hero now ends where its content does. */
   display: flex;
-  align-items: center;
-  padding-top: clamp(2rem, 5vw, 3.5rem);
-  padding-bottom: clamp(4rem, 8vw, 6rem);
+  align-items: flex-start;
+  padding-top: clamp(1.5rem, 3.5vw, 2.5rem);
+  padding-bottom: clamp(2.5rem, 5vw, 3.5rem);
 }
 .hero-inner { position: relative; text-align: center; }
 
@@ -757,43 +783,6 @@ html { scrollbar-color: var(--red) #f0f0f0; scrollbar-width: thin; }
 .chip-instagram:hover { border-color: var(--red-glow); box-shadow: var(--sh-glow-red-glow); }
 .chip-facebook:hover  { border-color: var(--red);   box-shadow: var(--sh-glow-red); }
 .chip-youtube:hover   { border-color: var(--red-deep); box-shadow: var(--sh-glow-red-deep); }
-
-/* ---- Scroll cue ---- */
-.scroll-cue {
-  position: absolute;
-  left: 50%;
-  bottom: 1.6rem;
-  transform: translateX(-50%);
-  opacity: 0.55;
-  transition: opacity var(--t);
-  animation: cueBob 2.4s ease-in-out infinite;
-}
-.scroll-cue:hover { opacity: 1; }
-.mouse {
-  display: block;
-  width: 24px; height: 38px;
-  border: 2px solid var(--ink-dim);
-  border-radius: var(--radius);
-  position: relative;
-}
-.wheel {
-  position: absolute;
-  left: 50%; top: 7px;
-  width: 3px; height: 7px;
-  margin-left: -1.5px;
-  border-radius: 2px;
-  background: var(--red-deep);
-  animation: wheelDrop 1.8s var(--ease) infinite;
-}
-@keyframes wheelDrop {
-  0% { transform: translateY(0); opacity: 1; }
-  70% { transform: translateY(13px); opacity: 0; }
-  100% { transform: translateY(0); opacity: 0; }
-}
-@keyframes cueBob {
-  0%, 100% { transform: translate(-50%, 0); }
-  50% { transform: translate(-50%, 8px); }
-}
 
 /* ==========================================================================
    06. PASTE CARD
@@ -1371,6 +1360,12 @@ html { scrollbar-color: var(--red) #f0f0f0; scrollbar-width: thin; }
      Inline: -1.25rem == half the .container gutter, giving the edge bleed. */
   margin: -1rem -1.25rem -1.5rem;
   padding: 1rem 1.25rem 1.5rem;
+  /* Without this, the snapport is the padding box and the first card's snap
+     rest is scrollLeft=20px (the 1.25rem inline padding), not 0 — Chrome
+     even re-snaps the rail 0→20 on load, and the arrows' "at the start"
+     check (scrollLeft < 8) could never be true. Insetting the snapport by
+     the same 1.25rem puts the first stop back at 0. */
+  scroll-padding-inline: 1.25rem;
   scrollbar-width: none;            /* the overhang says "scroll", not a bar */
   -ms-overflow-style: none;
 }
@@ -1394,16 +1389,67 @@ html { scrollbar-color: var(--red) #f0f0f0; scrollbar-width: thin; }
   scroll-snap-align: start;
 }
 
-/* Headings sit left over their rail. FAQ and the CTA aren't rails and stay
-   centred, so this is a list rather than a change to .section-head itself. */
+/* Rail-section heads: centred like every other section (the left-aligned
+   treatment is gone), but stretched to the full container width so the
+   .rail-nav arrows — absolutely positioned in the head's corner — sit at the
+   page's right margin instead of hugging the 680px text column.
+   position:relative is their anchor. */
 #how .section-head,
 #platforms .section-head,
 #features .section-head,
 #devices .section-head {
-  text-align: left;
+  position: relative;
   max-width: none;
   margin-inline: 0;
 }
+
+/* Arrow controls for the rails, injected by initRailNav() in script.js.
+   They live in the section head's bottom-right corner rather than overlaying
+   the cards, so they never cover content or fight the edge-bleed trick.
+   JS hides the pair (hidden attr) when a rail has nothing to scroll — e.g.
+   the platform grid on desktop — and disables whichever end is exhausted. */
+.rail-nav {
+  position: absolute;
+  right: 0;
+  bottom: 0.2rem;
+  display: flex;
+  gap: 0.55rem;
+}
+.rail-nav[hidden] { display: none; }  /* the flex above outranks the UA rule */
+
+.rail-btn {
+  display: grid;
+  place-items: center;
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--glass-brd);
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition: color var(--t-fast), border-color var(--t-fast),
+              background var(--t-fast), opacity var(--t-fast);
+}
+.rail-btn svg { width: 18px; height: 18px; }
+.rail-btn:hover:not(:disabled) {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  background: #fff;
+}
+.rail-btn:disabled { opacity: 0.35; cursor: default; }
+
+/* Narrow mouse windows: the corner-anchored pair starts overlapping the
+   centred subtitle text (review-measured at ~560px and below), so it drops
+   into the flow, centred under the head instead. */
+@media (max-width: 760px) {
+  .rail-nav {
+    position: static;
+    justify-content: center;
+    margin-top: 1.1rem;
+  }
+}
+
+/* Touch swipes the rail directly — the overhang is the affordance there. */
+@media (hover: none) { .rail-nav { display: none; } }
 
 .step-card {
   position: relative;
@@ -1489,9 +1535,31 @@ html { scrollbar-color: var(--red) #f0f0f0; scrollbar-width: thin; }
    09. PLATFORMS
    ========================================================================== */
 
-/* Layout lives in the shared rail rule near the top — this section only sets
-   its --rail-card there. A `display: grid` here would win on source order and
-   silently undo the rail. */
+/* On phones this section is the shared rail near the top, like the others —
+   it only sets its --rail-card there. But unlike the other rails, four cards
+   at the 300px basis plus gaps (~1287px) never fit inside --maxw, so desktops
+   got a permanently cut-off fourth card instead of the full row the rail
+   promises. So from tablet up this one section leaves the rail for a real
+   grid: 2×2 where a laptop window is too narrow for four across, four across
+   once they'd be a sane width. The margin/padding/overflow resets undo the
+   rail's edge-bleed trick, which only makes sense when there's something to
+   swipe. */
+@media (min-width: 901px) {
+  .platform-grid {
+    display: grid;
+    /* Capped, not 1fr: uncapped 2-up columns stretch the cards to ~540px —
+       nearly double the 300px they were designed at. 460px keeps them
+       card-shaped; justify-content centres the pair in the leftover space. */
+    grid-template-columns: repeat(2, minmax(0, 460px));
+    justify-content: center;
+    overflow: visible;
+    margin: 0;
+    padding: 0;
+  }
+}
+@media (min-width: 1150px) {
+  .platform-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
 
 .platform-card {
   position: relative;
@@ -1557,7 +1625,10 @@ html { scrollbar-color: var(--red) #f0f0f0; scrollbar-width: thin; }
 
 .platform-tags {
   display: flex;
-  justify-content: center;
+  /* flex-start, matching the card's left-aligned text: centred, the tag row
+     read as a detached cluster once grid mode let the cards grow past the
+     300px width the centring was tuned on. */
+  justify-content: flex-start;
   flex-wrap: wrap;
   gap: 0.45rem;
 }
@@ -2127,7 +2198,6 @@ html { scrollbar-color: var(--red) #f0f0f0; scrollbar-width: thin; }
   .paste-form { flex-direction: column; }
   .btn-download { width: 100%; min-height: 56px; }
   .float-icons { display: none; }
-  .scroll-cue { display: none; }
 
   /* The video preview. The 900px query caps this at 260px, which on a ~390px
      phone left it stranded in the middle of the card at well under half the
